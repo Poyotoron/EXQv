@@ -30,6 +30,7 @@ namespace Maaaaa.BodyQv
         private const float IdentityTolerance = 0.0001f;
         private const float FullPoolScanInterval = 5f;
         private const float DistalTieDistance = 0.005f;
+        private const float HeadFrontAllowance = 0.03f;
         private const int LeftHandMask = 1;
         private const int RightHandMask = 2;
 
@@ -136,6 +137,7 @@ namespace Maaaaa.BodyQv
         private LineRenderer[] pendingLines = new LineRenderer[MaxPendingBindings];
         private int[] pendingExcludedHandMasks = new int[MaxPendingBindings];
         private int pendingBindingCount;
+        private Vector3[] strokeSamplePoints = new Vector3[MaxStrokeSamples];
 
         private GameObject[] bodyColliderObjects = new GameObject[0];
         private CapsuleCollider[] bodyColliders = new CapsuleCollider[0];
@@ -353,7 +355,8 @@ namespace Maaaaa.BodyQv
 
         private void DetermineAndBroadcastBinding(int penId, int inkId, LineRenderer line, int excludedHandMask)
         {
-            if (line.positionCount <= 0)
+            int sampleCount = ReadStrokeSamples(line);
+            if (sampleCount <= 0)
                 return;
 
             Vector3 samplePoint = line.bounds.center;
@@ -387,7 +390,7 @@ namespace Maaaaa.BodyQv
                         continue;
 
                     foundHumanoidShape = true;
-                    float distance = GetAverageSurfaceDistance(line, shapeStart, shapeEnd, shapeRadius);
+                    float distance = GetAverageSurfaceDistance(shapeStart, shapeEnd, shapeRadius, sampleCount);
                     if (!ShouldReplaceCandidate(distance, player.playerId, boneValue,
                             bestDistance, bestPlayerId, bestType))
                         continue;
@@ -404,17 +407,17 @@ namespace Maaaaa.BodyQv
 
                 float scale = GetAvatarScale(player);
                 ConsiderTrackingPoint(player, TrackingHead, VRCPlayerApi.TrackingDataType.Head,
-                    headRadius * scale, line, false,
+                    headRadius * scale, sampleCount, false,
                     ref bestDistance, ref bestPlayerId, ref bestType, ref bestPosition, ref bestRotation);
                 ConsiderTrackingPoint(player, TrackingLeftHand, VRCPlayerApi.TrackingDataType.LeftHand,
-                    handRadius * scale, line, player.isLocal && (excludedHandMask & LeftHandMask) != 0,
+                    handRadius * scale, sampleCount, player.isLocal && (excludedHandMask & LeftHandMask) != 0,
                     ref bestDistance, ref bestPlayerId, ref bestType, ref bestPosition, ref bestRotation);
                 ConsiderTrackingPoint(player, TrackingRightHand, VRCPlayerApi.TrackingDataType.RightHand,
-                    handRadius * scale, line, player.isLocal && (excludedHandMask & RightHandMask) != 0,
+                    handRadius * scale, sampleCount, player.isLocal && (excludedHandMask & RightHandMask) != 0,
                     ref bestDistance, ref bestPlayerId, ref bestType, ref bestPosition, ref bestRotation);
 
                 Vector3 originPosition = player.GetPosition();
-                float originDistance = GetAverageSurfaceDistance(line, originPosition, originPosition, 0f);
+                float originDistance = GetAverageSurfaceDistance(originPosition, originPosition, 0f, sampleCount);
                 if (ShouldReplaceCandidate(originDistance, player.playerId, PlayerOrigin,
                         bestDistance, bestPlayerId, bestType))
                 {
@@ -434,7 +437,7 @@ namespace Maaaaa.BodyQv
         }
 
         private void ConsiderTrackingPoint(VRCPlayerApi player, int bindingType,
-            VRCPlayerApi.TrackingDataType trackingType, float radius, LineRenderer line, bool excluded,
+            VRCPlayerApi.TrackingDataType trackingType, float radius, int sampleCount, bool excluded,
             ref float bestDistance, ref int bestPlayerId, ref int bestType,
             ref Vector3 bestPosition, ref Quaternion bestRotation)
         {
@@ -442,7 +445,7 @@ namespace Maaaaa.BodyQv
                 return;
 
             VRCPlayerApi.TrackingData trackingData = player.GetTrackingData(trackingType);
-            float distance = GetAverageSurfaceDistance(line, trackingData.position, trackingData.position, radius);
+            float distance = GetAverageSurfaceDistance(trackingData.position, trackingData.position, radius, sampleCount);
             if (!ShouldReplaceCandidate(distance, player.playerId, bindingType,
                     bestDistance, bestPlayerId, bestType))
                 return;
@@ -454,18 +457,27 @@ namespace Maaaaa.BodyQv
             bestRotation = trackingData.rotation;
         }
 
-        private float GetAverageSurfaceDistance(LineRenderer line, Vector3 start, Vector3 end, float radius)
+        private int ReadStrokeSamples(LineRenderer line)
         {
             int pointCount = line.positionCount;
             if (pointCount <= 0)
-                return float.MaxValue;
+                return 0;
 
             int sampleCount = Mathf.Min(pointCount, MaxStrokeSamples);
-            float distanceSum = 0f;
             for (int i = 0; i < sampleCount; i++)
             {
                 int pointIndex = sampleCount == 1 ? 0 : i * (pointCount - 1) / (sampleCount - 1);
-                Vector3 point = line.GetPosition(pointIndex);
+                strokeSamplePoints[i] = line.GetPosition(pointIndex);
+            }
+            return sampleCount;
+        }
+
+        private float GetAverageSurfaceDistance(Vector3 start, Vector3 end, float radius, int sampleCount)
+        {
+            float distanceSum = 0f;
+            for (int i = 0; i < sampleCount; i++)
+            {
+                Vector3 point = strokeSamplePoints[i];
                 float centerDistance = Vector3.Distance(point, ClosestPointOnSegment(point, start, end));
                 distanceSum += Mathf.Max(0f, centerDistance - radius);
             }
@@ -591,7 +603,19 @@ namespace Maaaaa.BodyQv
                     Vector3 rightEye = player.GetBonePosition(HumanBodyBones.RightEye);
                     if (leftEye != Vector3.zero && rightEye != Vector3.zero)
                     {
-                        end = (leftEye + rightEye) * 0.5f;
+                        Vector3 eyeMid = (leftEye + rightEye) * 0.5f;
+                        Vector3 toEyes = eyeMid - start;
+                        if (toEyes.sqrMagnitude > 0.000001f)
+                        {
+                            Vector3 forward = toEyes.normalized;
+                            end = eyeMid - forward * (radius - HeadFrontAllowance * scale);
+                            if (Vector3.Dot(end - start, forward) < 0f)
+                                end = start;
+                        }
+                        else
+                        {
+                            end = start;
+                        }
                     }
                     else
                     {
@@ -1298,9 +1322,9 @@ namespace Maaaaa.BodyQv
                     continue;
 
                 int handMask = 0;
-                if (pickup == left || pickup.currentHand == VRC_Pickup.PickupHand.Left)
+                if (pickup == left)
                     handMask = LeftHandMask;
-                else if (pickup == right || pickup.currentHand == VRC_Pickup.PickupHand.Right)
+                else if (pickup == right)
                     handMask = RightHandMask;
 
                 if (handMask == 0)
@@ -1319,10 +1343,14 @@ namespace Maaaaa.BodyQv
                 VRC_Pickup pickup = targetPickups[penIndex];
                 if (Utilities.IsValid(pickup))
                 {
-                    if (pickup.currentHand == VRC_Pickup.PickupHand.Left)
-                        penHandMask = LeftHandMask;
-                    else if (pickup.currentHand == VRC_Pickup.PickupHand.Right)
-                        penHandMask = RightHandMask;
+                    VRCPlayerApi holdingPlayer = pickup.currentPlayer;
+                    if (Utilities.IsValid(holdingPlayer) && holdingPlayer.isLocal)
+                    {
+                        if (pickup.currentHand == VRC_Pickup.PickupHand.Left)
+                            penHandMask = LeftHandMask;
+                        else if (pickup.currentHand == VRC_Pickup.PickupHand.Right)
+                            penHandMask = RightHandMask;
+                    }
                 }
 
                 if (penHandMask == 0 && penIndex < lastHeldHandMasks.Length)
