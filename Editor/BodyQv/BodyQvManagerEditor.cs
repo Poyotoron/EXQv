@@ -30,10 +30,19 @@ namespace Maaaaa.EXQv.Editor
             if (GUILayout.Button(BodyQvStrings.AddScenePens))
                 BodyQvPenPickerWindow.Open((BodyQvManager)target);
 
-            serializedObject.ApplyModifiedProperties();
-            ((BodyQvManager)target).RefreshTargetReferences();
+            bool changed = serializedObject.ApplyModifiedProperties();
+            BodyQvManager manager = (BodyQvManager)target;
+            Object[] previousLateSyncs = BodyQvPenPickerWindow.CloneReferences(manager.TargetLateSyncs);
+            Object[] previousPickups = BodyQvPenPickerWindow.CloneReferences(manager.TargetPickups);
+            manager.RefreshTargetReferences();
+            changed |= !BodyQvPenPickerWindow.SameReferences(previousLateSyncs, manager.TargetLateSyncs) ||
+                       !BodyQvPenPickerWindow.SameReferences(previousPickups, manager.TargetPickups);
+            if (changed)
+                GrabQvButtonEditorUtility.CopyProxyToUdon(manager);
+            RefreshGrabQvLinks(manager);
 
             DrawPenWarnings();
+            DrawGrabQvInfo(manager);
             DrawQvPenVersionWarning();
 
             if (!enableBodyColliders.boolValue)
@@ -83,6 +92,38 @@ namespace Maaaaa.EXQv.Editor
             string version = package == null ? "不明" : package.version;
             if (version != "3.3.15")
                 EditorGUILayout.HelpBox(string.Format(BodyQvStrings.QvPenVersion, version), MessageType.Warning);
+        }
+
+        private static void RefreshGrabQvLinks(BodyQvManager manager)
+        {
+            GrabQvManager[] grabManagers = Resources.FindObjectsOfTypeAll<GrabQvManager>();
+            for (int i = 0; i < grabManagers.Length; i++)
+            {
+                if (grabManagers[i].gameObject.scene == manager.gameObject.scene)
+                    GrabQvBodyLinkEditorUtility.Refresh(grabManagers[i]);
+            }
+        }
+
+        private static void DrawGrabQvInfo(BodyQvManager manager)
+        {
+            GrabQvManager[] grabManagers = Resources.FindObjectsOfTypeAll<GrabQvManager>();
+            QvPen_PenManager[] bodyPens = manager.TargetedPens;
+            for (int i = 0; i < grabManagers.Length; i++)
+            {
+                GrabQvManager grab = grabManagers[i];
+                if (grab.BodyQvManager != manager)
+                    continue;
+                QvPen_PenManager[] grabPens = grab.TargetedPens;
+                for (int j = 0; bodyPens != null && j < bodyPens.Length; j++)
+                {
+                    for (int k = 0; grabPens != null && k < grabPens.Length; k++)
+                    {
+                        if (bodyPens[j] != null && bodyPens[j] == grabPens[k])
+                            EditorGUILayout.HelpBox(BodyQvStrings.GrabQvCombined + "\n" + bodyPens[j].name,
+                                MessageType.Info);
+                    }
+                }
+            }
         }
 
         private void DrawCollisionWarnings(int layer)
@@ -245,9 +286,17 @@ namespace Maaaaa.EXQv.Editor
                 pens.GetArrayElementAtIndex(index).objectReferenceValue = scenePens[i];
             }
 
-            serializedManager.ApplyModifiedProperties();
+            bool changed = serializedManager.ApplyModifiedProperties();
+            Object[] previousLateSyncs = CloneReferences(manager.TargetLateSyncs);
+            Object[] previousPickups = CloneReferences(manager.TargetPickups);
             manager.RefreshTargetReferences();
-            EditorUtility.SetDirty(manager);
+            changed |= !SameReferences(previousLateSyncs, manager.TargetLateSyncs) ||
+                       !SameReferences(previousPickups, manager.TargetPickups);
+            if (changed)
+            {
+                GrabQvButtonEditorUtility.CopyProxyToUdon(manager);
+                EditorUtility.SetDirty(manager);
+            }
         }
 
         private static bool Contains(SerializedProperty array, Object value)
@@ -258,6 +307,25 @@ namespace Maaaaa.EXQv.Editor
                     return true;
             }
             return false;
+        }
+
+        internal static Object[] CloneReferences(Object[] values)
+        {
+            return values == null ? null : (Object[])values.Clone();
+        }
+
+        internal static bool SameReferences(Object[] first, Object[] second)
+        {
+            if (first == null || second == null)
+                return first == second;
+            if (first.Length != second.Length)
+                return false;
+            for (int i = 0; i < first.Length; i++)
+            {
+                if (first[i] != second[i])
+                    return false;
+            }
+            return true;
         }
 
         private static string GetHierarchyPath(Transform target)

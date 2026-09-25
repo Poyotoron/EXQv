@@ -22,5 +22,6 @@ namespace Maaaaa.EXQv.Editor
         public const string PickerTitle = "対象にする QvPen";
         public const string PickerEmpty = "シーン内に QvPen_PenManager がありません。";
         public const string AddSelected = "選択したペンを追加";
+        public const string GrabQvCombined = "次のペンは GrabQv の対象でもあるため、組み合わせて動きます（体に追従し、持って位置を直せます）。";
     }
 }

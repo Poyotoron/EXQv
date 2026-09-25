@@ -26,6 +26,11 @@ namespace Maaaaa.EXQv
         private const float BoundsPadding = 0.03f;
         private const float MinimumBoundsSize = 0.05f;
         private const int ObjectSequenceRange = 1000000;
+        private const int MaxCombinedStates = 256;
+        private const int StateNone = 0;
+        private const int StateAttached = 1;
+        private const int StateFixed = 2;
+        private const int StateHeld = 3;
 
         [Header(GrabQvStrings.TargetPensHeader)]
         [SerializeField, Tooltip(GrabQvStrings.TargetPensTooltip)]
@@ -36,6 +41,9 @@ namespace Maaaaa.EXQv
 
         [SerializeField, HideInInspector]
         private VRC_Pickup[] targetPickups = new VRC_Pickup[0];
+
+        [SerializeField, HideInInspector]
+        private BodyQvManager bodyQvManager;
 
         [SerializeField, InspectorName(GrabQvStrings.AutoSplitDistanceLabel),
          Tooltip(GrabQvStrings.AutoSplitDistanceTooltip)]
@@ -62,6 +70,13 @@ namespace Maaaaa.EXQv
         private float[] handleAssignedTimes = new float[0];
         private float[] handleEmptySince = new float[0];
         private bool[] handleSawInk = new bool[0];
+        private bool[] handleWasLocallyHeld = new bool[0];
+        private bool[] handlePickupPending = new bool[0];
+        private bool[] handleDropPending = new bool[0];
+        private int[] handleHeldHandMasks = new int[0];
+        private Vector3[] handleLastFramePositions = new Vector3[0];
+        private Quaternion[] handleLastFrameRotations = new Quaternion[0];
+        private bool[] handleHasLastFrame = new bool[0];
 
         private int[] currentObjectIds = new int[0];
         private int localObjectSequence;
@@ -73,6 +88,7 @@ namespace Maaaaa.EXQv
         private int[] bindingPenIds = new int[MaxBindings];
         private int[] bindingInkIds = new int[MaxBindings];
         private int[] bindingObjectIds = new int[MaxBindings];
+        private int[] bindingPenIndexes = new int[MaxBindings];
         private Vector3[] bindingHandlePositions = new Vector3[MaxBindings];
         private Quaternion[] bindingHandleRotations = new Quaternion[MaxBindings];
         private LineRenderer[] bindingLines = new LineRenderer[MaxBindings];
@@ -93,6 +109,7 @@ namespace Maaaaa.EXQv
         private int[] pendingPenIds = new int[MaxPendingInks];
         private int[] pendingInkIds = new int[MaxPendingInks];
         private int[] pendingPenIndexes = new int[MaxPendingInks];
+        private int[] pendingExcludedHandMasks = new int[MaxPendingInks];
         private LineRenderer[] pendingLines = new LineRenderer[MaxPendingInks];
         private int pendingInkCount;
 
@@ -103,6 +120,30 @@ namespace Maaaaa.EXQv
 
         private float nextHandleCleanupTime;
 
+        private bool[] combinedPens = new bool[0];
+        private Vector3[] bindingSamplePoints = new Vector3[BodyQvManager.MaxStrokeSamples];
+        private Vector3[] rootCandidatePoints = new Vector3[BodyQvManager.MaxRootCandidates];
+
+        private int[] stateObjectIds = new int[MaxCombinedStates];
+        private int[] stateKinds = new int[MaxCombinedStates];
+        private int[] statePlayerIds = new int[MaxCombinedStates];
+        private int[] stateBindingTypes = new int[MaxCombinedStates];
+        private Vector3[] statePositions = new Vector3[MaxCombinedStates];
+        private Quaternion[] stateRotations = new Quaternion[MaxCombinedStates];
+        private int[] stateFreshness = new int[MaxCombinedStates];
+        private int[] stateAuthors = new int[MaxCombinedStates];
+        private Vector3[] stateLastFramePositions = new Vector3[MaxCombinedStates];
+        private Quaternion[] stateLastFrameRotations = new Quaternion[MaxCombinedStates];
+        private bool[] stateHasLastFrame = new bool[MaxCombinedStates];
+        private float[] stateReceivedTimes = new float[MaxCombinedStates];
+        private int stateCount;
+        private int[] framePosePlayerIds = new int[MaxCombinedStates];
+        private int[] framePoseTypes = new int[MaxCombinedStates];
+        private Vector3[] framePosePositions = new Vector3[MaxCombinedStates];
+        private Quaternion[] framePoseRotations = new Quaternion[MaxCombinedStates];
+        private bool[] framePoseValid = new bool[MaxCombinedStates];
+        private int framePoseCount;
+
         [UdonSynced] private int[] syncedHandleObjectIds = new int[0];
         [UdonSynced] private int[] syncedCurrentObjectIds = new int[0];
         [UdonSynced] private int[] syncedBindingPenIds = new int[0];
@@ -110,15 +151,27 @@ namespace Maaaaa.EXQv
         [UdonSynced] private int[] syncedBindingObjectIds = new int[0];
         [UdonSynced] private Vector3[] syncedBindingHandlePositions = new Vector3[0];
         [UdonSynced] private Quaternion[] syncedBindingHandleRotations = new Quaternion[0];
+        [UdonSynced] private int[] syncedBindingPenIndexes = new int[0];
+        [UdonSynced] private int[] syncedStateObjectIds = new int[0];
+        [UdonSynced] private int[] syncedStateKinds = new int[0];
+        [UdonSynced] private int[] syncedStatePlayerIds = new int[0];
+        [UdonSynced] private int[] syncedStateBindingTypes = new int[0];
+        [UdonSynced] private Vector3[] syncedStatePositions = new Vector3[0];
+        [UdonSynced] private Quaternion[] syncedStateRotations = new Quaternion[0];
+        [UdonSynced] private int[] syncedStateFreshness = new int[0];
+        [UdonSynced] private int[] syncedStateAuthors = new int[0];
 
         public QvPen_PenManager[] TargetedPens => targetedPens;
         public QvPen_LateSync[] TargetLateSyncs => targetLateSyncs;
         public VRC_Pickup[] TargetPickups => targetPickups;
         public GameObject[] HandleObjects => handleObjects;
+        public BodyQvManager BodyQvManager => bodyQvManager;
+        public bool[] CombinedPens => combinedPens;
 
         private void Start()
         {
             ResolveTargetReferences();
+            InitializeCombinedPens();
             InitializeHandles();
             currentObjectIds = new int[targetedPens.Length];
             poolChildCounts = new int[targetLateSyncs.Length * 2];
@@ -127,12 +180,21 @@ namespace Maaaaa.EXQv
                 poolChildCounts[i] = -1;
             nextFullPoolScanTime = Time.time + FullPoolScanInterval;
             nextHandleCleanupTime = Time.time + 0.5f;
+            if (Utilities.IsValid(bodyQvManager) && bodyQvManager.gameObject.activeInHierarchy)
+            {
+                for (int i = 0; i < targetedPens.Length; i++)
+                {
+                    if (combinedPens[i])
+                        bodyQvManager.RegisterCombinedPen(targetedPens[i]);
+                }
+            }
         }
 
         private void Update()
         {
             ScanInkPools();
             RetryHandleRequests();
+            DetectCombinedHandleChanges();
             if (Networking.IsOwner(gameObject) && Time.time >= nextHandleCleanupTime)
             {
                 nextHandleCleanupTime = Time.time + 0.5f;
@@ -143,8 +205,12 @@ namespace Maaaaa.EXQv
         public override void PostLateUpdate()
         {
             ProcessPendingInks();
-            if (bindingCount == 0 || !HasAssignedHandle())
+            framePoseCount = 0;
+            ProcessCombinedHandleChanges();
+            if (bindingCount == 0 && stateCount == 0)
                 return;
+
+            UpdateCombinedFrames();
 
             int index = 0;
             while (index < bindingCount)
@@ -168,16 +234,31 @@ namespace Maaaaa.EXQv
                     continue;
                 }
 
-                int handleIndex = FindHandleForObject(bindingObjectIds[index]);
-                if (handleIndex < 0 || !Utilities.IsValid(handleObjects[handleIndex]))
+                Vector3 framePosition;
+                Quaternion frameRotation;
+                if (IsCombinedBinding(index))
                 {
-                    index++;
-                    continue;
+                    if (!TryGetObjectFrame(bindingObjectIds[index], out framePosition, out frameRotation))
+                    {
+                        index++;
+                        continue;
+                    }
+                }
+                else
+                {
+                    int handleIndex = FindHandleForObject(bindingObjectIds[index]);
+                    if (handleIndex < 0 || !Utilities.IsValid(handleObjects[handleIndex]))
+                    {
+                        index++;
+                        continue;
+                    }
+                    Transform handle = handleObjects[handleIndex].transform;
+                    framePosition = handle.position;
+                    frameRotation = handle.rotation;
                 }
 
-                Transform handle = handleObjects[handleIndex].transform;
-                Quaternion deltaRotation = handle.rotation * Quaternion.Inverse(bindingHandleRotations[index]);
-                Vector3 worldPosition = deltaRotation * (-bindingHandlePositions[index]) + handle.position;
+                Quaternion deltaRotation = frameRotation * Quaternion.Inverse(bindingHandleRotations[index]);
+                Vector3 worldPosition = deltaRotation * (-bindingHandlePositions[index]) + framePosition;
                 line.transform.SetPositionAndRotation(worldPosition, deltaRotation);
                 index++;
             }
@@ -274,10 +355,13 @@ namespace Maaaaa.EXQv
             VRCPlayerApi localPlayer = Networking.LocalPlayer;
             if (!Utilities.IsValid(localPlayer) || QvPenUtilities.EulerAnglesToPlayerId(ownerIdVector) != localPlayer.playerId)
                 return;
-            EnqueueInk(penId, inkId, penIndex, line);
+            int excludedHandMask = 0;
+            if (IsCombinedPen(penIndex) && Utilities.IsValid(bodyQvManager))
+                excludedHandMask = bodyQvManager.GetDrawingHandMask(targetedPens[penIndex]);
+            EnqueueInk(penId, inkId, penIndex, line, excludedHandMask);
         }
 
-        private void EnqueueInk(int penId, int inkId, int penIndex, LineRenderer line)
+        private void EnqueueInk(int penId, int inkId, int penIndex, LineRenderer line, int excludedHandMask)
         {
             if (pendingInkCount >= MaxPendingInks)
             {
@@ -286,6 +370,7 @@ namespace Maaaaa.EXQv
                     pendingPenIds[i] = pendingPenIds[i + 1];
                     pendingInkIds[i] = pendingInkIds[i + 1];
                     pendingPenIndexes[i] = pendingPenIndexes[i + 1];
+                    pendingExcludedHandMasks[i] = pendingExcludedHandMasks[i + 1];
                     pendingLines[i] = pendingLines[i + 1];
                 }
                 pendingInkCount--;
@@ -293,6 +378,7 @@ namespace Maaaaa.EXQv
             pendingPenIds[pendingInkCount] = penId;
             pendingInkIds[pendingInkCount] = inkId;
             pendingPenIndexes[pendingInkCount] = penIndex;
+            pendingExcludedHandMasks[pendingInkCount] = excludedHandMask;
             pendingLines[pendingInkCount] = line;
             pendingInkCount++;
         }
@@ -307,17 +393,21 @@ namespace Maaaaa.EXQv
                 pendingLines[i] = null;
                 if (!Utilities.IsValid(line) || !line.useWorldSpace || !IsInkTransformIdentity(line.transform) || line.positionCount <= 0)
                     continue;
-                CreateOrAttachInk(pendingPenIds[i], pendingInkIds[i], pendingPenIndexes[i], line);
+                CreateOrAttachInk(pendingPenIds[i], pendingInkIds[i], pendingPenIndexes[i], line,
+                    pendingExcludedHandMasks[i]);
             }
         }
 
-        private void CreateOrAttachInk(int penId, int inkId, int penIndex, LineRenderer line)
+        private void CreateOrAttachInk(int penId, int inkId, int penIndex, LineRenderer line,
+            int excludedHandMask)
         {
             if (penIndex < 0 || penIndex >= currentObjectIds.Length)
                 return;
 
             int objectId = currentObjectIds[penIndex];
-            if (objectId != 0 && FindHandleForObject(objectId) < 0 && FindPendingRequest(objectId) < 0)
+            bool combined = IsCombinedPen(penIndex);
+            if (objectId != 0 && FindHandleForObject(objectId) < 0 &&
+                FindPendingRequest(objectId) < 0 && (!combined || FindState(objectId) < 0))
                 objectId = 0;
             if (objectId != 0 && ShouldAutoSplit(objectId, line))
                 objectId = 0;
@@ -335,6 +425,9 @@ namespace Maaaaa.EXQv
                     penIndex, objectId, referencePosition);
                 QueueHandleRequest(objectId, referencePosition);
                 Log(GrabQvStrings.CreatedLog + objectId);
+                if (combined)
+                    DetermineAndBroadcastState(objectId, line, referencePosition, Quaternion.identity,
+                        excludedHandMask, true);
             }
             else if (!TryGetObjectReference(objectId, out referencePosition))
             {
@@ -345,9 +438,13 @@ namespace Maaaaa.EXQv
             int handleIndex = FindHandleForObject(objectId);
             Vector3 handlePosition = handleIndex >= 0 ? handleObjects[handleIndex].transform.position : referencePosition;
             Quaternion handleRotation = handleIndex >= 0 ? handleObjects[handleIndex].transform.rotation : Quaternion.identity;
-            ReceiveBinding(penId, inkId, objectId, handlePosition, handleRotation);
+            Vector3 framePosition = handlePosition;
+            Quaternion frameRotation = handleRotation;
+            if (combined && !TryGetObjectFrame(objectId, out framePosition, out frameRotation))
+                return;
+            ReceiveBinding(penId, inkId, objectId, penIndex, framePosition, frameRotation);
             SendCustomNetworkEvent(NetworkEventTarget.Others, nameof(ReceiveBinding),
-                penId, inkId, objectId, handlePosition, handleRotation);
+                penId, inkId, objectId, penIndex, framePosition, frameRotation);
         }
 
         private int CreateObjectId()
@@ -433,6 +530,7 @@ namespace Maaaaa.EXQv
             VRCPlayerApi localPlayer = Networking.LocalPlayer;
             if (Utilities.IsValid(localPlayer))
                 Networking.SetOwner(localPlayer, handleObjects[handleIndex]);
+            ResetHandleState(handleIndex);
             handleObjectIds[handleIndex] = objectId;
             handleAssignedTimes[handleIndex] = Time.time;
             handleEmptySince[handleIndex] = -1f;
@@ -445,22 +543,24 @@ namespace Maaaaa.EXQv
         }
 
         [NetworkCallable(maxEventsPerSecond: 100)]
-        public void ReceiveBinding(int penId, int inkId, int objectId,
+        public void ReceiveBinding(int penId, int inkId, int objectId, int penIndex,
             Vector3 handlePosition, Quaternion handleRotation)
         {
-            if (!IsValidObjectId(objectId) || !IsFinite(handlePosition) || !IsValidRotation(handleRotation))
+            if (!IsValidObjectId(objectId) || penIndex < 0 || penIndex >= targetedPens.Length ||
+                !IsFinite(handlePosition) || !IsValidRotation(handleRotation))
                 return;
-            AddOrMergeBinding(penId, inkId, objectId, handlePosition, handleRotation);
+            AddOrMergeBinding(penId, inkId, objectId, penIndex, handlePosition, handleRotation);
             if (Networking.IsOwner(gameObject))
                 RequestSerialization();
         }
 
-        private void AddOrMergeBinding(int penId, int inkId, int objectId,
+        private void AddOrMergeBinding(int penId, int inkId, int objectId, int penIndex,
             Vector3 handlePosition, Quaternion handleRotation)
         {
             int existing = FindBinding(penId, inkId);
             if (existing >= 0)
             {
+                bindingPenIndexes[existing] = penIndex;
                 if (!bindingWasApplied[existing])
                     TryApplyBindingAt(existing, FindKnownLine(penId, inkId));
                 return;
@@ -471,6 +571,7 @@ namespace Maaaaa.EXQv
             bindingPenIds[index] = penId;
             bindingInkIds[index] = inkId;
             bindingObjectIds[index] = objectId;
+            bindingPenIndexes[index] = penIndex;
             bindingHandlePositions[index] = handlePosition;
             bindingHandleRotations[index] = handleRotation;
             bindingLines[index] = null;
@@ -487,20 +588,457 @@ namespace Maaaaa.EXQv
             bindingLines[index] = line;
             bindingSawInk[index] = true;
             int handleIndex = FindHandleForObject(bindingObjectIds[index]);
-            if (handleIndex < 0 || !Utilities.IsValid(handleObjects[handleIndex]))
+            bool combined = IsCombinedBinding(index);
+            if (!combined && (handleIndex < 0 || !Utilities.IsValid(handleObjects[handleIndex])))
+                return;
+            if (combined && FindState(bindingObjectIds[index]) < 0)
                 return;
             Transform inkTransform = line.transform;
             if (!line.useWorldSpace || !IsInkTransformIdentity(inkTransform))
                 return;
+            Vector3 framePosition;
+            Quaternion frameRotation;
+            if (combined)
+            {
+                if (!TryGetObjectFrame(bindingObjectIds[index], out framePosition, out frameRotation))
+                    return;
+            }
+            else
+            {
+                Transform handle = handleObjects[handleIndex].transform;
+                framePosition = handle.position;
+                frameRotation = handle.rotation;
+            }
             line.useWorldSpace = false;
-            Transform handle = handleObjects[handleIndex].transform;
-            Quaternion deltaRotation = handle.rotation * Quaternion.Inverse(bindingHandleRotations[index]);
-            Vector3 worldPosition = deltaRotation * (-bindingHandlePositions[index]) + handle.position;
+            Quaternion deltaRotation = frameRotation * Quaternion.Inverse(bindingHandleRotations[index]);
+            Vector3 worldPosition = deltaRotation * (-bindingHandlePositions[index]) + framePosition;
             inkTransform.SetPositionAndRotation(worldPosition, deltaRotation);
             bindingWasApplied[index] = true;
-            handleSawInk[handleIndex] = true;
-            handleEmptySince[handleIndex] = -1f;
+            if (handleIndex >= 0)
+            {
+                handleSawInk[handleIndex] = true;
+                handleEmptySince[handleIndex] = -1f;
+            }
             UpdateHandleBounds(bindingObjectIds[index]);
+        }
+
+        private void DetermineAndBroadcastState(int objectId, LineRenderer firstLine,
+            Vector3 framePosition, Quaternion frameRotation, int excludedHandMask, bool drawn)
+        {
+            if (!Utilities.IsValid(bodyQvManager) || !bodyQvManager.gameObject.activeInHierarchy)
+            {
+                BroadcastState(objectId, StateFixed, 0, -1, framePosition, frameRotation);
+                LogCombinedResult(objectId, drawn ? GrabQvStrings.DrawnReason : GrabQvStrings.DroppedReason,
+                    false, -1, -1, float.MaxValue, "");
+                return;
+            }
+
+            int sampleCount;
+            int rootCount;
+            int rootEndpointCount;
+            if (drawn)
+            {
+                ReadLineSamples(firstLine, out sampleCount, out rootCount);
+                rootEndpointCount = rootCount;
+            }
+            else
+                ReadObjectSamples(objectId, out sampleCount, out rootCount, out rootEndpointCount);
+            if (sampleCount <= 0)
+            {
+                BroadcastState(objectId, StateFixed, 0, -1, framePosition, frameRotation);
+                return;
+            }
+
+            int playerId;
+            int bindingType;
+            float surfaceDistance;
+            string method;
+            Vector3 bonePosition;
+            Quaternion boneRotation;
+            if (bodyQvManager.TryDetermineBinding(bindingSamplePoints, sampleCount,
+                    rootCandidatePoints, rootCount, rootEndpointCount, drawn, excludedHandMask,
+                    out playerId, out bindingType, out surfaceDistance, out method,
+                    out bonePosition, out boneRotation))
+            {
+                Quaternion inverseBone = Quaternion.Inverse(boneRotation);
+                Vector3 localPosition = inverseBone * (framePosition - bonePosition);
+                Quaternion localRotation = inverseBone * frameRotation;
+                BroadcastState(objectId, StateAttached, playerId, bindingType,
+                    localPosition, localRotation);
+                LogCombinedResult(objectId, drawn ? GrabQvStrings.DrawnReason : GrabQvStrings.DroppedReason,
+                    true, playerId, bindingType, surfaceDistance, method);
+                return;
+            }
+
+            BroadcastState(objectId, StateFixed, 0, -1, framePosition, frameRotation);
+            LogCombinedResult(objectId, drawn ? GrabQvStrings.DrawnReason : GrabQvStrings.DroppedReason,
+                false, bodyQvManager.LastNearestPlayerId, bodyQvManager.LastNearestType,
+                bodyQvManager.LastNearestDistance, "");
+        }
+
+        private void ReadLineSamples(LineRenderer line, out int sampleCount, out int rootCount)
+        {
+            sampleCount = 0;
+            rootCount = 0;
+            if (!Utilities.IsValid(line) || line.positionCount <= 0)
+                return;
+            int pointCount = line.positionCount;
+            sampleCount = Mathf.Min(pointCount, BodyQvManager.MaxStrokeSamples);
+            for (int i = 0; i < sampleCount; i++)
+            {
+                int offset = sampleCount == 1 ? 0 : i * (pointCount - 1) / (sampleCount - 1);
+                bindingSamplePoints[i] = GetLineWorldPoint(line, pointCount - 1 - offset);
+            }
+            rootCandidatePoints[0] = GetLineWorldPoint(line, pointCount - 1);
+            rootCount = 1;
+            if (pointCount > 1)
+            {
+                rootCandidatePoints[1] = GetLineWorldPoint(line, 0);
+                rootCount = 2;
+            }
+        }
+
+        private void ReadObjectSamples(int objectId, out int sampleCount, out int rootCount,
+            out int rootEndpointCount)
+        {
+            int totalPointCount = 0;
+            rootCount = 0;
+            for (int i = 0; i < bindingCount; i++)
+            {
+                if (bindingObjectIds[i] != objectId || !Utilities.IsValid(bindingLines[i]) ||
+                    bindingLines[i].positionCount <= 0)
+                    continue;
+                LineRenderer line = bindingLines[i];
+                totalPointCount += line.positionCount;
+                if (rootCount < BodyQvManager.MaxRootCandidates)
+                    rootCandidatePoints[rootCount++] = GetLineWorldPoint(line, line.positionCount - 1);
+                if (line.positionCount > 1 && rootCount < BodyQvManager.MaxRootCandidates)
+                    rootCandidatePoints[rootCount++] = GetLineWorldPoint(line, 0);
+            }
+            rootEndpointCount = rootCount;
+
+            sampleCount = Mathf.Min(totalPointCount, BodyQvManager.MaxStrokeSamples);
+            for (int sampleIndex = 0; sampleIndex < sampleCount; sampleIndex++)
+            {
+                int wanted = sampleCount == 1 ? 0 : sampleIndex * (totalPointCount - 1) / (sampleCount - 1);
+                int passed = 0;
+                for (int bindingIndex = 0; bindingIndex < bindingCount; bindingIndex++)
+                {
+                    LineRenderer line = bindingLines[bindingIndex];
+                    if (bindingObjectIds[bindingIndex] != objectId || !Utilities.IsValid(line) ||
+                        line.positionCount <= 0)
+                        continue;
+                    if (wanted >= passed + line.positionCount)
+                    {
+                        passed += line.positionCount;
+                        continue;
+                    }
+                    int lineOffset = wanted - passed;
+                    bindingSamplePoints[sampleIndex] =
+                        GetLineWorldPoint(line, line.positionCount - 1 - lineOffset);
+                    break;
+                }
+            }
+
+            for (int i = 0; i < sampleCount && rootCount < BodyQvManager.MaxRootCandidates; i++)
+                rootCandidatePoints[rootCount++] = bindingSamplePoints[i];
+        }
+
+        private void BroadcastState(int objectId, int stateKind, int playerId, int bindingType,
+            Vector3 position, Quaternion rotation)
+        {
+            VRCPlayerApi localPlayer = Networking.LocalPlayer;
+            int author = Utilities.IsValid(localPlayer) ? localPlayer.playerId : 0;
+            int freshness = Networking.GetServerTimeInMilliseconds();
+            ReceiveCombinedState(objectId, stateKind, playerId, bindingType,
+                position, rotation, freshness, author);
+            SendCustomNetworkEvent(NetworkEventTarget.Others, nameof(ReceiveCombinedState),
+                objectId, stateKind, playerId, bindingType, position, rotation, freshness, author);
+        }
+
+        [NetworkCallable(maxEventsPerSecond: 100)]
+        public void ReceiveCombinedState(int objectId, int stateKind, int playerId, int bindingType,
+            Vector3 position, Quaternion rotation, int freshness, int author)
+        {
+            if (!IsValidObjectId(objectId) || stateKind < StateNone || stateKind > StateHeld ||
+                !IsFinite(position) || !IsValidRotation(rotation) || author < 0 || author > 65535)
+                return;
+            if (stateKind == StateAttached &&
+                (!Utilities.IsValid(bodyQvManager) || !bodyQvManager.IsValidBindingTarget(playerId, bindingType)))
+                return;
+            if (stateKind == StateHeld && (playerId <= 0 || playerId > 65535))
+                return;
+
+            int index = FindState(objectId);
+            if (index >= 0 && !IsNewerState(freshness, author, stateFreshness[index], stateAuthors[index]))
+                return;
+            if (stateKind == StateNone)
+            {
+                if (index >= 0)
+                    RemoveStateAt(index);
+                if (Networking.IsOwner(gameObject))
+                    RequestSerialization();
+                return;
+            }
+            if (index < 0)
+            {
+                if (stateCount >= MaxCombinedStates)
+                    RemoveStateAt(0);
+                index = stateCount++;
+                stateObjectIds[index] = objectId;
+                stateHasLastFrame[index] = false;
+            }
+            stateKinds[index] = stateKind;
+            statePlayerIds[index] = playerId;
+            stateBindingTypes[index] = bindingType;
+            statePositions[index] = position;
+            stateRotations[index] = rotation;
+            stateFreshness[index] = freshness;
+            stateAuthors[index] = author;
+            stateReceivedTimes[index] = Time.time;
+            if (Networking.IsOwner(gameObject))
+                RequestSerialization();
+            TryApplyBindingsForObject(objectId);
+        }
+
+        private bool IsNewerState(int freshness, int author, int previousFreshness, int previousAuthor)
+        {
+            int difference = freshness - previousFreshness;
+            return difference > 0 || (difference == 0 && author > previousAuthor);
+        }
+
+        private int FindState(int objectId)
+        {
+            for (int i = 0; i < stateCount; i++)
+            {
+                if (stateObjectIds[i] == objectId)
+                    return i;
+            }
+            return -1;
+        }
+
+        private void RemoveStateAt(int index)
+        {
+            if (index < 0 || index >= stateCount)
+                return;
+            for (int i = index; i < stateCount - 1; i++)
+            {
+                stateObjectIds[i] = stateObjectIds[i + 1];
+                stateKinds[i] = stateKinds[i + 1];
+                statePlayerIds[i] = statePlayerIds[i + 1];
+                stateBindingTypes[i] = stateBindingTypes[i + 1];
+                statePositions[i] = statePositions[i + 1];
+                stateRotations[i] = stateRotations[i + 1];
+                stateFreshness[i] = stateFreshness[i + 1];
+                stateAuthors[i] = stateAuthors[i + 1];
+                stateLastFramePositions[i] = stateLastFramePositions[i + 1];
+                stateLastFrameRotations[i] = stateLastFrameRotations[i + 1];
+                stateHasLastFrame[i] = stateHasLastFrame[i + 1];
+                stateReceivedTimes[i] = stateReceivedTimes[i + 1];
+            }
+            stateCount--;
+            stateObjectIds[stateCount] = 0;
+            stateHasLastFrame[stateCount] = false;
+        }
+
+        private bool TryGetObjectFrame(int objectId, out Vector3 position, out Quaternion rotation)
+        {
+            int index = FindState(objectId);
+            if (index < 0)
+            {
+                position = Vector3.zero;
+                rotation = Quaternion.identity;
+                return false;
+            }
+            if (stateKinds[index] == StateFixed)
+            {
+                position = statePositions[index];
+                rotation = stateRotations[index];
+                return true;
+            }
+            if (stateKinds[index] == StateAttached)
+            {
+                Vector3 bonePosition;
+                Quaternion boneRotation;
+                if (!Utilities.IsValid(bodyQvManager) ||
+                    !TryGetCachedBodyPose(statePlayerIds[index], stateBindingTypes[index],
+                        out bonePosition, out boneRotation))
+                {
+                    if (stateHasLastFrame[index])
+                    {
+                        position = stateLastFramePositions[index];
+                        rotation = stateLastFrameRotations[index];
+                        return true;
+                    }
+                    position = Vector3.zero;
+                    rotation = Quaternion.identity;
+                    return false;
+                }
+                position = bonePosition + boneRotation * statePositions[index];
+                rotation = boneRotation * stateRotations[index];
+                return true;
+            }
+
+            int handleIndex = FindHandleForObject(objectId);
+            if (handleIndex < 0 || !Utilities.IsValid(handleObjects[handleIndex]))
+            {
+                position = Vector3.zero;
+                rotation = Quaternion.identity;
+                return false;
+            }
+            Transform handle = handleObjects[handleIndex].transform;
+            position = handle.position + handle.rotation * statePositions[index];
+            rotation = handle.rotation * stateRotations[index];
+            return true;
+        }
+
+        private bool TryGetCachedBodyPose(int playerId, int bindingType,
+            out Vector3 position, out Quaternion rotation)
+        {
+            for (int i = 0; i < framePoseCount; i++)
+            {
+                if (framePosePlayerIds[i] != playerId || framePoseTypes[i] != bindingType)
+                    continue;
+                position = framePosePositions[i];
+                rotation = framePoseRotations[i];
+                return framePoseValid[i];
+            }
+            bool valid = bodyQvManager.TryGetBindingPose(playerId, bindingType, out position, out rotation);
+            if (framePoseCount < MaxCombinedStates)
+            {
+                framePosePlayerIds[framePoseCount] = playerId;
+                framePoseTypes[framePoseCount] = bindingType;
+                framePosePositions[framePoseCount] = position;
+                framePoseRotations[framePoseCount] = rotation;
+                framePoseValid[framePoseCount] = valid;
+                framePoseCount++;
+            }
+            return valid;
+        }
+
+        private void UpdateCombinedFrames()
+        {
+            for (int i = 0; i < stateCount; i++)
+            {
+                Vector3 position;
+                Quaternion rotation;
+                if (!TryGetObjectFrame(stateObjectIds[i], out position, out rotation))
+                    continue;
+                stateLastFramePositions[i] = position;
+                stateLastFrameRotations[i] = rotation;
+                stateHasLastFrame[i] = true;
+                int handleIndex = FindHandleForObject(stateObjectIds[i]);
+                if (handleIndex < 0 || !Utilities.IsValid(handleColliders[handleIndex]))
+                    continue;
+                handleColliders[handleIndex].transform.SetPositionAndRotation(position, rotation);
+                handleLastFramePositions[handleIndex] = position;
+                handleLastFrameRotations[handleIndex] = rotation;
+                handleHasLastFrame[handleIndex] = true;
+            }
+        }
+
+        private void DetectCombinedHandleChanges()
+        {
+            for (int i = 0; i < handleObjectIds.Length; i++)
+            {
+                int objectId = handleObjectIds[i];
+                if (objectId == 0 || FindState(objectId) < 0 || !Utilities.IsValid(handlePickups[i]))
+                {
+                    // 何もすることが無いフレームで Transform に書き込まないよう、残っているものがあるときだけ戻す。
+                    if (handleWasLocallyHeld[i] || handlePickupPending[i] || handleDropPending[i] || handleHasLastFrame[i])
+                        ResetHandleState(i);
+                    continue;
+                }
+                VRC_Pickup pickup = handlePickups[i];
+                VRCPlayerApi player = pickup.currentPlayer;
+                bool heldLocally = pickup.IsHeld && Utilities.IsValid(player) && player.isLocal;
+                if (heldLocally)
+                {
+                    if (pickup.currentHand == VRC_Pickup.PickupHand.Left)
+                        handleHeldHandMasks[i] = BodyQvManager.LeftHandMask;
+                    else if (pickup.currentHand == VRC_Pickup.PickupHand.Right)
+                        handleHeldHandMasks[i] = BodyQvManager.RightHandMask;
+                }
+                if (heldLocally && !handleWasLocallyHeld[i])
+                    handlePickupPending[i] = true;
+                else if (!heldLocally && handleWasLocallyHeld[i])
+                    handleDropPending[i] = true;
+                handleWasLocallyHeld[i] = heldLocally;
+            }
+        }
+
+        private void ProcessCombinedHandleChanges()
+        {
+            VRCPlayerApi localPlayer = Networking.LocalPlayer;
+            for (int i = 0; i < handleObjectIds.Length; i++)
+            {
+                int objectId = handleObjectIds[i];
+                if (objectId == 0)
+                    continue;
+                if (handlePickupPending[i])
+                {
+                    handlePickupPending[i] = false;
+                    Vector3 framePosition;
+                    Quaternion frameRotation;
+                    int stateIndex = FindState(objectId);
+                    if (stateIndex >= 0 && stateHasLastFrame[stateIndex])
+                    {
+                        framePosition = stateLastFramePositions[stateIndex];
+                        frameRotation = stateLastFrameRotations[stateIndex];
+                    }
+                    else if (!TryGetObjectFrame(objectId, out framePosition, out frameRotation))
+                        continue;
+                    Transform handle = handleObjects[i].transform;
+                    Quaternion inverseHandle = Quaternion.Inverse(handle.rotation);
+                    BroadcastState(objectId, StateHeld,
+                        Utilities.IsValid(localPlayer) ? localPlayer.playerId : 0, -1,
+                        inverseHandle * (framePosition - handle.position), inverseHandle * frameRotation);
+                    Log(GrabQvStrings.HeldLog + objectId);
+                }
+                if (!handleDropPending[i])
+                    continue;
+                handleDropPending[i] = false;
+                VRCPlayerApi currentPlayer = handlePickups[i].currentPlayer;
+                if (handlePickups[i].IsHeld && Utilities.IsValid(currentPlayer) && !currentPlayer.isLocal)
+                    continue;
+                Vector3 droppedPosition;
+                Quaternion droppedRotation;
+                if (!TryGetObjectFrame(objectId, out droppedPosition, out droppedRotation))
+                    continue;
+                DetermineAndBroadcastState(objectId, null, droppedPosition, droppedRotation,
+                    handleHeldHandMasks[i], false);
+                Log(GrabQvStrings.DroppedLog + objectId);
+            }
+        }
+
+        private bool IsCombinedPen(int penIndex)
+        {
+            return penIndex >= 0 && penIndex < combinedPens.Length && combinedPens[penIndex];
+        }
+
+        private bool IsCombinedBinding(int bindingIndex)
+        {
+            return bindingIndex >= 0 && bindingIndex < bindingCount &&
+                   IsCombinedPen(bindingPenIndexes[bindingIndex]);
+        }
+
+        private void LogCombinedResult(int objectId, string reason, bool attached,
+            int playerId, int bindingType, float distance, string method)
+        {
+            if (!logResults)
+                return;
+            if (attached)
+            {
+                Log(GrabQvStrings.BindingResultPrefix + objectId + " / " + reason +
+                    " / playerId " + playerId + " / " + bodyQvManager.GetBindingTypeName(bindingType) +
+                    " / " + distance + " m / " + method);
+                return;
+            }
+            string nearest = playerId > 0 && bindingType >= 0
+                ? " / 最寄り: playerId " + playerId + " / " + bodyQvManager.GetBindingTypeName(bindingType) +
+                  " / " + distance + " m"
+                : " / 最寄り: なし";
+            Log(GrabQvStrings.BindingResultPrefix + objectId + " / " + reason + " / 付かない" + nearest);
         }
 
         private bool ShouldAutoSplit(int objectId, LineRenderer line)
@@ -526,7 +1064,19 @@ namespace Maaaaa.EXQv
             int handleIndex = FindHandleForObject(objectId);
             if (handleIndex < 0 || !Utilities.IsValid(handleColliders[handleIndex]))
                 return;
-            Transform handle = handleObjects[handleIndex].transform;
+            int stateIndex = FindState(objectId);
+            if (stateIndex >= 0)
+            {
+                Vector3 framePosition;
+                Quaternion frameRotation;
+                if (!TryGetObjectFrame(objectId, out framePosition, out frameRotation))
+                    return;
+                handleColliders[handleIndex].transform.SetPositionAndRotation(framePosition, frameRotation);
+                handleLastFramePositions[handleIndex] = framePosition;
+                handleLastFrameRotations[handleIndex] = frameRotation;
+                handleHasLastFrame[handleIndex] = true;
+            }
+            Transform handle = handleColliders[handleIndex].transform;
             Vector3 minimum = Vector3.zero;
             Vector3 maximum = Vector3.zero;
             bool found = false;
@@ -613,6 +1163,20 @@ namespace Maaaaa.EXQv
                 ReleaseHandle(i);
                 changed = true;
             }
+            int stateIndex = 0;
+            while (stateIndex < stateCount)
+            {
+                int objectId = stateObjectIds[stateIndex];
+                if (HasLiveInk(objectId) || Time.time - stateReceivedTimes[stateIndex] <= BindingArrivalGracePeriod)
+                {
+                    stateIndex++;
+                    continue;
+                }
+                BroadcastState(objectId, StateNone, 0, -1, Vector3.zero, Quaternion.identity);
+                changed = true;
+                if (stateIndex < stateCount && stateObjectIds[stateIndex] == objectId)
+                    stateIndex++;
+            }
             if (changed)
                 RequestSerialization();
         }
@@ -635,6 +1199,7 @@ namespace Maaaaa.EXQv
             int objectId = handleObjectIds[index];
             ClearCurrentObject(objectId);
             SetHandleAvailable(index, false);
+            ResetHandleState(index);
             handleObjectIds[index] = 0;
             handleAssignedTimes[index] = 0f;
             handleEmptySince[index] = -1f;
@@ -643,6 +1208,8 @@ namespace Maaaaa.EXQv
             if (Utilities.IsValid(localPlayer) && Utilities.IsValid(handleObjects[index]))
                 Networking.SetOwner(localPlayer, handleObjects[index]);
             MoveHandle(index, handleHomePositions[index], handleHomeRotations[index]);
+            if (FindState(objectId) >= 0)
+                BroadcastState(objectId, StateNone, 0, -1, Vector3.zero, Quaternion.identity);
             Log(GrabQvStrings.ReleasedLog + objectId);
         }
 
@@ -667,6 +1234,13 @@ namespace Maaaaa.EXQv
             handleAssignedTimes = new float[length];
             handleEmptySince = new float[length];
             handleSawInk = new bool[length];
+            handleWasLocallyHeld = new bool[length];
+            handlePickupPending = new bool[length];
+            handleDropPending = new bool[length];
+            handleHeldHandMasks = new int[length];
+            handleLastFramePositions = new Vector3[length];
+            handleLastFrameRotations = new Quaternion[length];
+            handleHasLastFrame = new bool[length];
             handleHomePositions = new Vector3[length];
             handleHomeRotations = new Quaternion[length];
             for (int i = 0; i < length; i++)
@@ -676,7 +1250,30 @@ namespace Maaaaa.EXQv
                 handleHomePositions[i] = handleObjects[i].transform.position;
                 handleHomeRotations[i] = handleObjects[i].transform.rotation;
                 handleEmptySince[i] = -1f;
+                if (Utilities.IsValid(handleColliders[i]))
+                {
+                    handleColliders[i].transform.localPosition = Vector3.zero;
+                    handleColliders[i].transform.localRotation = Quaternion.identity;
+                }
                 SetHandleAvailable(i, false);
+            }
+        }
+
+        private void ResetHandleState(int index)
+        {
+            if (index < 0 || index >= handleObjectIds.Length)
+                return;
+            handleWasLocallyHeld[index] = false;
+            handleHeldHandMasks[index] = 0;
+            handlePickupPending[index] = false;
+            handleDropPending[index] = false;
+            handleHasLastFrame[index] = false;
+            handleLastFramePositions[index] = Vector3.zero;
+            handleLastFrameRotations[index] = Quaternion.identity;
+            if (Utilities.IsValid(handleColliders[index]))
+            {
+                handleColliders[index].transform.localPosition = Vector3.zero;
+                handleColliders[index].transform.localRotation = Quaternion.identity;
             }
         }
 
@@ -810,6 +1407,7 @@ namespace Maaaaa.EXQv
                 bindingPenIds[i] = bindingPenIds[i + 1];
                 bindingInkIds[i] = bindingInkIds[i + 1];
                 bindingObjectIds[i] = bindingObjectIds[i + 1];
+                bindingPenIndexes[i] = bindingPenIndexes[i + 1];
                 bindingHandlePositions[i] = bindingHandlePositions[i + 1];
                 bindingHandleRotations[i] = bindingHandleRotations[i + 1];
                 bindingLines[i] = bindingLines[i + 1];
@@ -818,6 +1416,7 @@ namespace Maaaaa.EXQv
                 bindingReceivedTimes[i] = bindingReceivedTimes[i + 1];
             }
             bindingCount--;
+            bindingPenIndexes[bindingCount] = 0;
             bindingLines[bindingCount] = null;
             bindingSawInk[bindingCount] = false;
             bindingWasApplied[bindingCount] = false;
@@ -914,6 +1513,7 @@ namespace Maaaaa.EXQv
             syncedBindingPenIds = new int[bindingCount];
             syncedBindingInkIds = new int[bindingCount];
             syncedBindingObjectIds = new int[bindingCount];
+            syncedBindingPenIndexes = new int[bindingCount];
             syncedBindingHandlePositions = new Vector3[bindingCount];
             syncedBindingHandleRotations = new Quaternion[bindingCount];
             for (int i = 0; i < bindingCount; i++)
@@ -921,8 +1521,29 @@ namespace Maaaaa.EXQv
                 syncedBindingPenIds[i] = bindingPenIds[i];
                 syncedBindingInkIds[i] = bindingInkIds[i];
                 syncedBindingObjectIds[i] = bindingObjectIds[i];
+                syncedBindingPenIndexes[i] = bindingPenIndexes[i];
                 syncedBindingHandlePositions[i] = bindingHandlePositions[i];
                 syncedBindingHandleRotations[i] = bindingHandleRotations[i];
+            }
+
+            syncedStateObjectIds = new int[stateCount];
+            syncedStateKinds = new int[stateCount];
+            syncedStatePlayerIds = new int[stateCount];
+            syncedStateBindingTypes = new int[stateCount];
+            syncedStatePositions = new Vector3[stateCount];
+            syncedStateRotations = new Quaternion[stateCount];
+            syncedStateFreshness = new int[stateCount];
+            syncedStateAuthors = new int[stateCount];
+            for (int i = 0; i < stateCount; i++)
+            {
+                syncedStateObjectIds[i] = stateObjectIds[i];
+                syncedStateKinds[i] = stateKinds[i];
+                syncedStatePlayerIds[i] = statePlayerIds[i];
+                syncedStateBindingTypes[i] = stateBindingTypes[i];
+                syncedStatePositions[i] = statePositions[i];
+                syncedStateRotations[i] = stateRotations[i];
+                syncedStateFreshness[i] = stateFreshness[i];
+                syncedStateAuthors[i] = stateAuthors[i];
             }
         }
 
@@ -937,20 +1558,25 @@ namespace Maaaaa.EXQv
                 }
             }
             ApplySyncedHandles();
+            ApplySyncedStates();
 
             if (syncedBindingPenIds == null || syncedBindingInkIds == null || syncedBindingObjectIds == null ||
-                syncedBindingHandlePositions == null || syncedBindingHandleRotations == null)
+                syncedBindingPenIndexes == null || syncedBindingHandlePositions == null ||
+                syncedBindingHandleRotations == null)
                 return;
             int length = syncedBindingPenIds.Length;
             if (length > MaxBindings || syncedBindingInkIds.Length != length || syncedBindingObjectIds.Length != length ||
+                syncedBindingPenIndexes.Length != length ||
                 syncedBindingHandlePositions.Length != length || syncedBindingHandleRotations.Length != length)
                 return;
             for (int i = 0; i < length; i++)
             {
-                if (!IsValidObjectId(syncedBindingObjectIds[i]) || !IsFinite(syncedBindingHandlePositions[i]) ||
+                if (!IsValidObjectId(syncedBindingObjectIds[i]) || syncedBindingPenIndexes[i] < 0 ||
+                    syncedBindingPenIndexes[i] >= targetedPens.Length || !IsFinite(syncedBindingHandlePositions[i]) ||
                     !IsValidRotation(syncedBindingHandleRotations[i]))
                     continue;
                 AddOrMergeBinding(syncedBindingPenIds[i], syncedBindingInkIds[i], syncedBindingObjectIds[i],
+                    syncedBindingPenIndexes[i],
                     syncedBindingHandlePositions[i], syncedBindingHandleRotations[i]);
             }
         }
@@ -966,13 +1592,17 @@ namespace Maaaaa.EXQv
                     continue;
                 int previousObjectId = handleObjectIds[i];
                 bool changed = previousObjectId != objectId;
-                handleObjectIds[i] = objectId;
                 if (!changed)
                     continue;
+                ResetHandleState(i);
+                handleObjectIds[i] = objectId;
                 if (objectId == 0)
                 {
                     ClearCurrentObject(previousObjectId);
                     SetHandleAvailable(i, false);
+                    handleAssignedTimes[i] = 0f;
+                    handleEmptySince[i] = -1f;
+                    handleSawInk[i] = false;
                 }
                 else
                 {
@@ -983,6 +1613,26 @@ namespace Maaaaa.EXQv
                     RemovePendingRequest(objectId);
                     TryApplyBindingsForObject(objectId);
                 }
+            }
+        }
+
+        private void ApplySyncedStates()
+        {
+            if (syncedStateObjectIds == null || syncedStateKinds == null || syncedStatePlayerIds == null ||
+                syncedStateBindingTypes == null || syncedStatePositions == null || syncedStateRotations == null ||
+                syncedStateFreshness == null || syncedStateAuthors == null)
+                return;
+            int length = syncedStateObjectIds.Length;
+            if (length > MaxCombinedStates || syncedStateKinds.Length != length ||
+                syncedStatePlayerIds.Length != length || syncedStateBindingTypes.Length != length ||
+                syncedStatePositions.Length != length || syncedStateRotations.Length != length ||
+                syncedStateFreshness.Length != length || syncedStateAuthors.Length != length)
+                return;
+            for (int i = 0; i < length; i++)
+            {
+                ReceiveCombinedState(syncedStateObjectIds[i], syncedStateKinds[i],
+                    syncedStatePlayerIds[i], syncedStateBindingTypes[i], syncedStatePositions[i],
+                    syncedStateRotations[i], syncedStateFreshness[i], syncedStateAuthors[i]);
             }
         }
 
@@ -1009,26 +1659,89 @@ namespace Maaaaa.EXQv
             return -1;
         }
 
-        private void ResolveTargetReferences()
+        private void InitializeCombinedPens()
         {
             int length = targetedPens == null ? 0 : targetedPens.Length;
+            combinedPens = new bool[length];
+            if (!Utilities.IsValid(bodyQvManager) || !bodyQvManager.gameObject.activeInHierarchy)
+                return;
+            QvPen_PenManager[] bodyPens = bodyQvManager.TargetedPens;
+            for (int i = 0; i < length; i++)
+            {
+                QvPen_PenManager pen = targetedPens[i];
+                for (int j = 0; bodyPens != null && j < bodyPens.Length; j++)
+                {
+                    if (pen != null && bodyPens[j] == pen)
+                    {
+                        combinedPens[i] = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        private bool ResolveTargetReferences()
+        {
+            bool changed = false;
+            int length = targetedPens == null ? 0 : targetedPens.Length;
             if (targetLateSyncs == null || targetLateSyncs.Length != length)
+            {
                 targetLateSyncs = new QvPen_LateSync[length];
+                changed = true;
+            }
             if (targetPickups == null || targetPickups.Length != length)
+            {
                 targetPickups = new VRC_Pickup[length];
+                changed = true;
+            }
             for (int i = 0; i < length; i++)
             {
                 QvPen_PenManager pen = targetedPens[i];
                 if (!Utilities.IsValid(pen))
                 {
-                    targetLateSyncs[i] = null;
-                    targetPickups[i] = null;
+                    if (Utilities.IsValid(targetLateSyncs[i]))
+                    {
+                        targetLateSyncs[i] = null;
+                        changed = true;
+                    }
+                    if (Utilities.IsValid(targetPickups[i]))
+                    {
+                        targetPickups[i] = null;
+                        changed = true;
+                    }
                     continue;
                 }
-                if (!Utilities.IsValid(targetLateSyncs[i]))
-                    targetLateSyncs[i] = pen.GetComponentInChildren<QvPen_LateSync>(true);
-                if (!Utilities.IsValid(targetPickups[i]))
-                    targetPickups[i] = pen.GetComponentInChildren<VRC_Pickup>(true);
+                QvPen_LateSync lateSync = pen.GetComponentInChildren<QvPen_LateSync>(true);
+                VRC_Pickup pickup = pen.GetComponentInChildren<VRC_Pickup>(true);
+                if (targetLateSyncs[i] != lateSync)
+                {
+                    targetLateSyncs[i] = lateSync;
+                    changed = true;
+                }
+                if (targetPickups[i] != pickup)
+                {
+                    targetPickups[i] = pickup;
+                    changed = true;
+                }
+            }
+            return changed;
+        }
+
+        public override void OnPlayerLeft(VRCPlayerApi player)
+        {
+            if (!Utilities.IsValid(player) || !Networking.IsOwner(gameObject))
+                return;
+            int playerId = player.playerId;
+            for (int i = 0; i < stateCount; i++)
+            {
+                if ((stateKinds[i] != StateAttached && stateKinds[i] != StateHeld) ||
+                    statePlayerIds[i] != playerId)
+                    continue;
+                Vector3 position = stateHasLastFrame[i] ? stateLastFramePositions[i] : statePositions[i];
+                Quaternion rotation = stateHasLastFrame[i] ? stateLastFrameRotations[i] : stateRotations[i];
+                int objectId = stateObjectIds[i];
+                BroadcastState(objectId, StateFixed, 0, -1, position, rotation);
+                Log(GrabQvStrings.PlayerLeftLog + objectId);
             }
         }
 
@@ -1044,11 +1757,44 @@ namespace Maaaaa.EXQv
             if (autoSplitDistance < 0f)
                 autoSplitDistance = 0f;
             ResolveTargetReferences();
+            RefreshBodyQvManagerReference();
         }
 
-        public void RefreshTargetReferences()
+        public bool RefreshTargetReferences()
         {
-            ResolveTargetReferences();
+            return ResolveTargetReferences();
+        }
+
+        public int RefreshBodyQvManagerReference()
+        {
+            BodyQvManager[] managers = Resources.FindObjectsOfTypeAll<BodyQvManager>();
+            BodyQvManager found = null;
+            int count = 0;
+            for (int i = 0; i < managers.Length; i++)
+            {
+                BodyQvManager candidate = managers[i];
+                if (candidate == null || candidate.gameObject.scene != gameObject.scene ||
+                    !SharesTargetPen(candidate))
+                    continue;
+                count++;
+                found = candidate;
+            }
+            bodyQvManager = count == 1 ? found : null;
+            return count;
+        }
+
+        private bool SharesTargetPen(BodyQvManager manager)
+        {
+            QvPen_PenManager[] bodyPens = manager.TargetedPens;
+            for (int i = 0; targetedPens != null && i < targetedPens.Length; i++)
+            {
+                for (int j = 0; bodyPens != null && j < bodyPens.Length; j++)
+                {
+                    if (targetedPens[i] != null && targetedPens[i] == bodyPens[j])
+                        return true;
+                }
+            }
+            return false;
         }
 #endif
     }

@@ -27,12 +27,15 @@ namespace Maaaaa.EXQv.Editor
             EditorGUILayout.Space();
             if (GUILayout.Button(GrabQvStrings.AddScenePens))
                 GrabQvPenPickerWindow.Open((GrabQvManager)target);
-            serializedObject.ApplyModifiedProperties();
+            bool changed = serializedObject.ApplyModifiedProperties();
 
             GrabQvManager manager = (GrabQvManager)target;
-            manager.RefreshTargetReferences();
+            changed |= manager.RefreshTargetReferences();
+            if (changed)
+                GrabQvButtonEditorUtility.CopyProxyToUdon(manager);
+            int bodyManagerCount = GrabQvBodyLinkEditorUtility.Refresh(manager);
             DrawPenWarnings(manager);
-            DrawBodyQvWarning(manager);
+            DrawBodyQvInfo(manager, bodyManagerCount);
             DrawButtonWarnings(manager);
             DrawQvPenVersionWarning();
         }
@@ -61,24 +64,27 @@ namespace Maaaaa.EXQv.Editor
                 EditorGUILayout.HelpBox(GrabQvStrings.MissingLateSync, MessageType.Warning);
         }
 
-        private static void DrawBodyQvWarning(GrabQvManager manager)
+        private static void DrawBodyQvInfo(GrabQvManager manager, int bodyManagerCount)
         {
-            BodyQvManager[] bodyManagers = Object.FindObjectsOfType<BodyQvManager>(true);
+            if (bodyManagerCount > 1)
+            {
+                EditorGUILayout.HelpBox(GrabQvStrings.MultipleBodyQvManagers, MessageType.Warning);
+                return;
+            }
+            BodyQvManager bodyManager = manager.BodyQvManager;
+            if (bodyManager == null)
+                return;
             QvPen_PenManager[] pens = manager.TargetedPens;
             for (int i = 0; pens != null && i < pens.Length; i++)
             {
                 if (pens[i] == null)
                     continue;
-                for (int j = 0; j < bodyManagers.Length; j++)
+                QvPen_PenManager[] bodyPens = bodyManager.TargetedPens;
+                for (int j = 0; bodyPens != null && j < bodyPens.Length; j++)
                 {
-                    QvPen_PenManager[] bodyPens = bodyManagers[j].TargetedPens;
-                    for (int k = 0; bodyPens != null && k < bodyPens.Length; k++)
-                    {
-                        if (bodyPens[k] != pens[i])
-                            continue;
-                        EditorGUILayout.HelpBox(GrabQvStrings.BodyQvOverlap + "\n" + pens[i].name, MessageType.Warning);
-                        return;
-                    }
+                    if (bodyPens[j] == pens[i])
+                        EditorGUILayout.HelpBox(GrabQvStrings.BodyQvCombined + "\n" + pens[i].name,
+                            MessageType.Info);
                 }
             }
         }
@@ -253,14 +259,14 @@ namespace Maaaaa.EXQv.Editor
                 new object[] { target, typeof(GrabQvSplitButton) }) as GrabQvSplitButton;
         }
 
-        private static void CopyProxyToUdon(GrabQvSplitButton split)
+        internal static void CopyProxyToUdon(UdonSharp.UdonSharpBehaviour behaviour)
         {
             System.Type type = System.Type.GetType("UdonSharpEditor.UdonSharpEditorUtility, UdonSharp.Editor");
             MethodInfo method = type == null ? null : type.GetMethod("CopyProxyToUdon",
                 BindingFlags.Public | BindingFlags.Static, null,
                 new[] { typeof(UdonSharp.UdonSharpBehaviour) }, null);
             if (method != null)
-                method.Invoke(null, new object[] { split });
+                method.Invoke(null, new object[] { behaviour });
         }
 
         private static bool HasButton(GrabQvSplitButton[] buttons, QvPen_PenManager pen)
@@ -279,6 +285,49 @@ namespace Maaaaa.EXQv.Editor
             {
                 if (pens[i] == pen)
                     return true;
+            }
+            return false;
+        }
+    }
+
+    internal static class GrabQvBodyLinkEditorUtility
+    {
+        public static int Refresh(GrabQvManager manager)
+        {
+            BodyQvManager[] managers = Resources.FindObjectsOfTypeAll<BodyQvManager>();
+            BodyQvManager found = null;
+            int count = 0;
+            for (int i = 0; i < managers.Length; i++)
+            {
+                BodyQvManager candidate = managers[i];
+                if (candidate == null || candidate.gameObject.scene != manager.gameObject.scene ||
+                    !SharesPen(manager.TargetedPens, candidate.TargetedPens))
+                    continue;
+                found = candidate;
+                count++;
+            }
+            BodyQvManager value = count == 1 ? found : null;
+            if (manager.BodyQvManager == value)
+                return count;
+
+            Undo.RecordObject(manager, "BodyQv とのつなぎ込みを更新");
+            SerializedObject serialized = new SerializedObject(manager);
+            serialized.FindProperty("bodyQvManager").objectReferenceValue = value;
+            serialized.ApplyModifiedPropertiesWithoutUndo();
+            EditorUtility.SetDirty(manager);
+            GrabQvButtonEditorUtility.CopyProxyToUdon(manager);
+            return count;
+        }
+
+        private static bool SharesPen(QvPen_PenManager[] first, QvPen_PenManager[] second)
+        {
+            for (int i = 0; first != null && i < first.Length; i++)
+            {
+                for (int j = 0; second != null && j < second.Length; j++)
+                {
+                    if (first[i] != null && first[i] == second[j])
+                        return true;
+                }
             }
             return false;
         }
@@ -337,9 +386,13 @@ namespace Maaaaa.EXQv.Editor
                 pens.InsertArrayElementAtIndex(index);
                 pens.GetArrayElementAtIndex(index).objectReferenceValue = scenePens[i];
             }
-            serializedManager.ApplyModifiedProperties();
-            manager.RefreshTargetReferences();
-            EditorUtility.SetDirty(manager);
+            bool changed = serializedManager.ApplyModifiedProperties();
+            changed |= manager.RefreshTargetReferences();
+            if (changed)
+            {
+                GrabQvButtonEditorUtility.CopyProxyToUdon(manager);
+                EditorUtility.SetDirty(manager);
+            }
         }
 
         private static bool Contains(SerializedProperty array, Object value)
