@@ -22,6 +22,7 @@ namespace Maaaaa.EXQv
         private const float RequestRetryInterval = 3f;
         private const float EmptyReleaseDelay = 3f;
         private const float NeverArrivedReleaseDelay = 30f;
+        private const float BindingArrivalGracePeriod = 10f;
         private const float BoundsPadding = 0.03f;
         private const float MinimumBoundsSize = 0.05f;
         private const int ObjectSequenceRange = 1000000;
@@ -77,6 +78,7 @@ namespace Maaaaa.EXQv
         private LineRenderer[] bindingLines = new LineRenderer[MaxBindings];
         private bool[] bindingSawInk = new bool[MaxBindings];
         private bool[] bindingWasApplied = new bool[MaxBindings];
+        private float[] bindingReceivedTimes = new float[MaxBindings];
         private int bindingCount;
 
         private int[] knownPenIds = new int[MaxKnownInks];
@@ -315,6 +317,8 @@ namespace Maaaaa.EXQv
                 return;
 
             int objectId = currentObjectIds[penIndex];
+            if (objectId != 0 && FindHandleForObject(objectId) < 0 && FindPendingRequest(objectId) < 0)
+                objectId = 0;
             if (objectId != 0 && ShouldAutoSplit(objectId, line))
                 objectId = 0;
 
@@ -472,6 +476,7 @@ namespace Maaaaa.EXQv
             bindingLines[index] = null;
             bindingSawInk[index] = false;
             bindingWasApplied[index] = false;
+            bindingReceivedTimes[index] = Time.time;
             TryApplyBindingAt(index, FindKnownLine(penId, inkId));
         }
 
@@ -616,7 +621,10 @@ namespace Maaaaa.EXQv
         {
             for (int i = 0; i < bindingCount; i++)
             {
-                if (bindingObjectIds[i] == objectId && Utilities.IsValid(bindingLines[i]))
+                if (bindingObjectIds[i] != objectId)
+                    continue;
+                if (Utilities.IsValid(bindingLines[i]) ||
+                    (!bindingSawInk[i] && Time.time - bindingReceivedTimes[i] <= BindingArrivalGracePeriod))
                     return true;
             }
             return false;
@@ -625,6 +633,7 @@ namespace Maaaaa.EXQv
         private void ReleaseHandle(int index)
         {
             int objectId = handleObjectIds[index];
+            ClearCurrentObject(objectId);
             SetHandleAvailable(index, false);
             handleObjectIds[index] = 0;
             handleAssignedTimes[index] = 0f;
@@ -635,6 +644,20 @@ namespace Maaaaa.EXQv
                 Networking.SetOwner(localPlayer, handleObjects[index]);
             MoveHandle(index, handleHomePositions[index], handleHomeRotations[index]);
             Log(GrabQvStrings.ReleasedLog + objectId);
+        }
+
+        private bool ClearCurrentObject(int objectId)
+        {
+            bool changed = false;
+            for (int penIndex = 0; penIndex < currentObjectIds.Length; penIndex++)
+            {
+                if (currentObjectIds[penIndex] != objectId)
+                    continue;
+                currentObjectIds[penIndex] = 0;
+                changed = true;
+                Log(GrabQvStrings.CurrentObjectClearedLog + objectId + GrabQvStrings.PenLabel + penIndex);
+            }
+            return changed;
         }
 
         private void InitializeHandles()
@@ -792,11 +815,13 @@ namespace Maaaaa.EXQv
                 bindingLines[i] = bindingLines[i + 1];
                 bindingSawInk[i] = bindingSawInk[i + 1];
                 bindingWasApplied[i] = bindingWasApplied[i + 1];
+                bindingReceivedTimes[i] = bindingReceivedTimes[i + 1];
             }
             bindingCount--;
             bindingLines[bindingCount] = null;
             bindingSawInk[bindingCount] = false;
             bindingWasApplied[bindingCount] = false;
+            bindingReceivedTimes[bindingCount] = 0f;
         }
 
         private int FindKnownInk(int penId, int inkId)
@@ -903,7 +928,6 @@ namespace Maaaaa.EXQv
 
         public override void OnDeserialization()
         {
-            ApplySyncedHandles();
             if (syncedCurrentObjectIds != null && syncedCurrentObjectIds.Length == currentObjectIds.Length)
             {
                 for (int i = 0; i < currentObjectIds.Length; i++)
@@ -912,6 +936,7 @@ namespace Maaaaa.EXQv
                         currentObjectIds[i] = syncedCurrentObjectIds[i];
                 }
             }
+            ApplySyncedHandles();
 
             if (syncedBindingPenIds == null || syncedBindingInkIds == null || syncedBindingObjectIds == null ||
                 syncedBindingHandlePositions == null || syncedBindingHandleRotations == null)
@@ -939,12 +964,16 @@ namespace Maaaaa.EXQv
                 int objectId = syncedHandleObjectIds[i];
                 if (objectId != 0 && !IsValidObjectId(objectId))
                     continue;
-                bool changed = handleObjectIds[i] != objectId;
+                int previousObjectId = handleObjectIds[i];
+                bool changed = previousObjectId != objectId;
                 handleObjectIds[i] = objectId;
                 if (!changed)
                     continue;
                 if (objectId == 0)
+                {
+                    ClearCurrentObject(previousObjectId);
                     SetHandleAvailable(i, false);
+                }
                 else
                 {
                     handleAssignedTimes[i] = Time.time;

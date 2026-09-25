@@ -12,6 +12,8 @@ namespace Maaaaa.EXQv
         public const string AssignedLog = "[GrabQv] 持ち手を割り当て: ";
         public const string ReleasedLog = "[GrabQv] 持ち手を空きに戻しました: ";
         public const string FullLog = "[GrabQv] 空いている持ち手がありません: ";
+        public const string CurrentObjectClearedLog = "[GrabQv] 今のオブジェクトを外しました: オブジェクト ";
+        public const string PenLabel = " / ペン ";
         public const string SplitButtonText = "Split\n(Global)";
         public const string AddScenePens = "シーンの QvPen から対象を追加";
         public const string PickerTitle = "GrabQv 対象ペン";
