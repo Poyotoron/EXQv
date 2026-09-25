@@ -101,7 +101,7 @@ MonoBehaviour:
   bodyColliderDistance: 3
   hipsRadius: 0.16
   torsoRadius: 0.15
-  neckRadius: 0.06
+  neckRadius: 0.045
   headRadius: 0.09
   upperArmRadius: 0.075
   lowerArmRadius: 0.065

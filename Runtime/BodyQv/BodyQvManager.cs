@@ -34,9 +34,10 @@ namespace Maaaaa.EXQv
         private const float HeadCenterAboveBone = 0.09f;
         private const float HeadAccessoryBottom = -0.05f;
         private const float HandHeadPreferenceDistance = 0.005f;
-        private const float HeadStartSurfaceDistance = 0.03f;
+        private const float HeadStartSurfaceDistance = 0.07f;
         private const float HeadStartMinimumHeight = -0.08f;
-        private const float HeadStartFallbackMinimumHeight = -0.14f;
+        private const float HeadStartNeckMinimumHeight = -0.05f;
+        private const float HeadStartFallbackMinimumHeight = -0.19f;
         private const int HeadAccessoryRequiredPercent = 80;
         private const int LeftHandMask = 1;
         private const int RightHandMask = 2;
@@ -89,7 +90,7 @@ namespace Maaaaa.EXQv
         private float torsoRadius = 0.15f;
 
         [SerializeField, Tooltip("身長 1.3 m のアバターに対する首の半径です。")]
-        private float neckRadius = 0.06f;
+        private float neckRadius = 0.045f;
 
         [SerializeField, Tooltip("身長 1.3 m のアバターに対する頭の半径です。")]
         private float headRadius = 0.09f;
@@ -632,7 +633,7 @@ namespace Maaaaa.EXQv
                 Vector3 neck = player.GetBonePosition(HumanBodyBones.Neck);
                 Vector3 heightOrigin = neck != Vector3.zero ? neck : center;
                 float minimumHeight = neck != Vector3.zero
-                    ? 0f
+                    ? HeadStartNeckMinimumHeight * scale
                     : HeadStartFallbackMinimumHeight * scale;
                 bool allAboveNeck = true;
                 for (int i = 0; i < sampleCount; i++)
@@ -939,7 +940,7 @@ namespace Maaaaa.EXQv
             {
                 Vector3 neck = nearestHeadPlayer.GetBonePosition(HumanBodyBones.Neck);
                 Vector3 heightOrigin = neck != Vector3.zero ? neck : nearestHeadCenter;
-                float minimumHeight = neck != Vector3.zero ? 0f :
+                float minimumHeight = neck != Vector3.zero ? HeadStartNeckMinimumHeight * nearestHeadScale :
                     HeadStartFallbackMinimumHeight * nearestHeadScale;
                 bool allAboveNeck = true;
                 for (int i = 0; i < sampleCount; i++)
@@ -1192,6 +1193,11 @@ namespace Maaaaa.EXQv
                     break;
                 case HumanBodyBones.Neck:
                     radius = neckRadius * scale;
+                    Vector3 neckDirection = end - start;
+                    float neckLength = neckDirection.magnitude;
+                    end = end != Vector3.zero && neckLength > radius
+                        ? end - neckDirection / neckLength * radius
+                        : start;
                     break;
                 case HumanBodyBones.Head:
                     radius = headRadius * scale;
