@@ -1,3 +1,25 @@
 # 手持ちの QvPen で使う
 
-（このページは執筆中）
+`BodyQv` / `GrabQv` の Prefab は、QvPen 一式ごと置くためのものです。ワールドにすでに置いてある QvPen（色や見た目を着せ替えたものなど）を BodyQv や GrabQv のペンにしたいときは、**管理だけの Prefab** を置いて、そのペンを対象に指定します。
+
+## BodyQv の場合
+
+1. `Packages/EXQv/Prefabs/BodyQv/BodyQvManager` をシーンに置きます（置く位置はどこでも構いません）。
+2. `BodyQvManager` を選び、Inspector の **「シーン内の QvPen を一覧から追加」** を押します。
+3. 開いた一覧で、体に描けるようにしたいペン（`PenManager`）にチェックを入れ、**「選択したペンを追加」** を押します。
+4. [レイヤーの設定](layers.md)の警告が出ていれば、ボタンで直します。
+
+## GrabQv の場合
+
+1. `Packages/EXQv/Prefabs/GrabQv/GrabQvManager` をシーンに置きます。
+2. `GrabQvManager` を選び、Inspector の **「シーンの QvPen から対象を追加」** で、持てるものを描くペンを追加します。
+3. **「区切りボタンを作る」** を押して、追加したペンに Split ボタンを付けます。
+
+対象から外したペンの Split ボタンが残っていると、Inspector に警告と **「不要な区切りボタンを消す」** ボタンが出ます。
+
+## 注意
+
+- 対象に指定するのは、QvPen の **`PenManager`**（`Pens/PenManager (n)`）です。ペン本体（`Pen`）ではありません。一覧から選べば正しく入ります。
+- **同じペンを BodyQv と GrabQv の両方に指定しないでください。** GrabQv の Inspector に警告が出ます。
+- 対象に指定していない QvPen は、今までどおりふつうのペンとして動きます。
+- 1 つの管理に、複数のペンをまとめて指定できます。ペンを増やすときは、今ある管理に足してください。

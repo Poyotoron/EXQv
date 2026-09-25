@@ -45,7 +45,7 @@ jobs:
 
           version = json.loads(Path("package.json").read_text(encoding="utf-8"))["version"]
           with Path(os.environ["GITHUB_ENV"]).open("a", encoding="utf-8") as env_file:
-              env_file.write(f"BODYQV_VERSION={version}\n")
+              env_file.write(f"EXQV_VERSION={version}\n")
           PY
 
       - name: Configure Pages

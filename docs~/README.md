@@ -21,7 +21,7 @@ mkdocs serve -f "docs~/mkdocs.yml"
 公開前は、パッケージのバージョンを指定して厳格モードでビルドします。
 
 ```powershell
-$env:BODYQV_VERSION = "0.1.0"; mkdocs build --strict -f "docs~/mkdocs.yml"
+$env:EXQV_VERSION = "0.2.0"; mkdocs build --strict -f "docs~/mkdocs.yml"
 ```
 
 仮想環境がまだ無い場合だけ、次のコマンドで作成します。

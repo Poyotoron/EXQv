@@ -1,6 +1,6 @@
-site_name: BodyQv
-site_url: https://ghp.maaaaa.net/BodyQv/
-repo_url: https://github.com/Poyotoron/BodyQv
+site_name: EXQv
+site_url: https://ghp.maaaaa.net/EXQv/
+repo_url: https://github.com/Poyotoron/EXQv
 site_dir: site
 
 theme:
@@ -48,16 +48,19 @@ extra_css:
   - stylesheets/extra.css
 
 extra:
-  bodyqv_version: !ENV [BODYQV_VERSION, dev]
+  exqv_version: !ENV [EXQV_VERSION, dev]
 
 nav:
   - はじめに: index.md
   - インストール: install.md
   - クイックスタート: quickstart.md
-  - 描き方: drawing.md
-  - 設置と設定: setup.md
-  - 手持ちの QvPen で使う: existing-pens.md
-  - レイヤーの設定: layers.md
+  - BodyQv:
+      - 体に描く: bodyqv.md
+      - 手持ちの QvPen で使う: existing-pens.md
+      - レイヤーの設定: layers.md
+  - GrabQv:
+      - 描いたものを持つ: grabqv.md
+  - 設定の一覧: setup.md
   - できないこと・制限: limitations.md
   - 困ったときは: troubleshooting.md
   - 更新履歴: changelog.md
