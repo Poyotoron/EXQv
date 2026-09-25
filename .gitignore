@@ -104,3 +104,15 @@ InitTestScene*.unity*
 
 # Auto-generated cache in Assets folder
 /[Aa]ssets/[Ss]ceneDependencyCache*
+
+# AI Agents
+.claude/
+.claude
+.codex/
+.codex
+.agents/
+.agents
+
+# Docs site build output
+docs~/site/
+docs~/.cache/

@@ -1,0 +1,19 @@
+{
+  "name": "net.maaaaa.exqv",
+  "displayName": "EXQv",
+  "version": "0.2.0",
+  "description": "QvPen で描いた線を、アバターの体に追従させたり（BodyQv）、手で持てるようにしたり（GrabQv）するワールド用の拡張です。",
+  "unity": "2022.3",
+  "license": "MIT",
+  "author": {
+    "name": "Poyotoron",
+    "url": "https://github.com/Poyotoron"
+  },
+  "url": "https://github.com/Poyotoron/EXQv/releases/download/0.2.0/net.maaaaa.exqv-0.2.0.zip",
+  "documentationUrl": "https://ghp.maaaaa.net/EXQv/",
+  "vpmDependencies": {
+    "com.vrchat.worlds": ">=3.8.1",
+    "net.ureishi.qvpen": ">=3.3.15 <3.4.0"
+  },
+  "changelogUrl": "https://github.com/Poyotoron/EXQv/blob/main/CHANGELOG.md"
+}

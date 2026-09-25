@@ -1,0 +1,66 @@
+site_name: EXQv
+site_url: https://ghp.maaaaa.net/EXQv/
+repo_url: https://github.com/Poyotoron/EXQv
+site_dir: site
+
+theme:
+  name: material
+  language: ja
+  custom_dir: overrides
+  # サイト共通のファビコン。実体は www.maaaaa.net 側にある
+  favicon: https://www.maaaaa.net/favicon.png
+  features:
+    - navigation.sections
+    - navigation.expand
+    - toc.follow
+    - content.code.copy
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-night
+        name: ダークテーマに切り替える
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-sunny
+        name: ライトテーマに切り替える
+
+plugins:
+  - search:
+      lang: ja
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - pymdownx.details
+  - pymdownx.superfences
+  - tables
+  - toc:
+      permalink: true
+
+extra_css:
+  - stylesheets/extra.css
+
+extra:
+  exqv_version: !ENV [EXQV_VERSION, dev]
+
+nav:
+  - はじめに: index.md
+  - インストール: install.md
+  - クイックスタート: quickstart.md
+  - BodyQv:
+      - 体に描く: bodyqv.md
+      - 手持ちの QvPen で使う: existing-pens.md
+      - レイヤーの設定: layers.md
+  - GrabQv:
+      - 描いたものを持つ: grabqv.md
+  - 設定の一覧: setup.md
+  - できないこと・制限: limitations.md
+  - 困ったときは: troubleshooting.md
+  - 更新履歴: changelog.md
