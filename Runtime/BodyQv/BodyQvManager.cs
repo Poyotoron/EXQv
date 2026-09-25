@@ -903,8 +903,9 @@ namespace Maaaaa.EXQv
             int sampleCount = Mathf.Min(pointCount, MaxStrokeSamples);
             for (int i = 0; i < sampleCount; i++)
             {
+                // QvPen のインクは描き終わりの点から並んでいるので、描き始めから順に読む。
                 int pointIndex = sampleCount == 1 ? 0 : i * (pointCount - 1) / (sampleCount - 1);
-                strokeSamplePoints[i] = line.GetPosition(pointIndex);
+                strokeSamplePoints[i] = line.GetPosition(pointCount - 1 - pointIndex);
             }
             return sampleCount;
         }
