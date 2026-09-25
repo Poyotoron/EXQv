@@ -33,6 +33,7 @@ namespace Maaaaa.BodyQv
         private const float HeadCenterBehindEyes = 0.07f;
         private const float HeadCenterAboveBone = 0.09f;
         private const float HeadAccessoryBottom = -0.05f;
+        private const float HandHeadPreferenceDistance = 0.005f;
         private const int HeadAccessoryRequiredPercent = 80;
         private const int LeftHandMask = 1;
         private const int RightHandMask = 2;
@@ -85,7 +86,7 @@ namespace Maaaaa.BodyQv
         private float torsoRadius = 0.15f;
 
         [SerializeField, Tooltip("身長 1.3 m のアバターに対する首の半径です。")]
-        private float neckRadius = 0.10f;
+        private float neckRadius = 0.06f;
 
         [SerializeField, Tooltip("身長 1.3 m のアバターに対する頭の半径です。")]
         private float headRadius = 0.11f;
@@ -161,6 +162,9 @@ namespace Maaaaa.BodyQv
         private int[] pendingExcludedHandMasks = new int[MaxPendingBindings];
         private int pendingBindingCount;
         private Vector3[] strokeSamplePoints = new Vector3[MaxStrokeSamples];
+        private int lastNearestPlayerId = -1;
+        private int lastNearestType = -1;
+        private float lastNearestDistance = float.MaxValue;
 
         private GameObject[] bodyColliderObjects = new GameObject[0];
         private CapsuleCollider[] bodyColliders = new CapsuleCollider[0];
@@ -384,22 +388,258 @@ namespace Maaaaa.BodyQv
             if (sampleCount <= 0)
                 return;
 
-            Vector3 samplePoint = line.bounds.center;
+            int playerId;
+            int bindingType;
+            float surfaceDistance;
+            string method;
+            Vector3 bindingPosition;
+            Quaternion bindingRotation;
+            if (!TryDetermineBinding(strokeSamplePoints, sampleCount, excludedHandMask,
+                    out playerId, out bindingType, out surfaceDistance, out method,
+                    out bindingPosition, out bindingRotation))
+            {
+                LogNoBinding(lastNearestPlayerId, lastNearestType, lastNearestDistance);
+                return;
+            }
+
+            LogBindingResult(playerId, bindingType, surfaceDistance, method);
+            SendCustomNetworkEvent(NetworkEventTarget.All, nameof(ReceiveBinding),
+                penId, inkId, playerId, bindingType, bindingPosition, bindingRotation);
+        }
+
+        public bool TryDetermineBinding(Vector3[] samplePoints, int sampleCount, int excludedHandMask,
+            out int playerId, out int bindingType, out float surfaceDistance, out string method,
+            out Vector3 bindingPosition, out Quaternion bindingRotation)
+        {
+            playerId = -1;
+            bindingType = -1;
+            surfaceDistance = float.MaxValue;
+            method = "";
+            bindingPosition = Vector3.zero;
+            bindingRotation = Quaternion.identity;
+            lastNearestPlayerId = -1;
+            lastNearestType = -1;
+            lastNearestDistance = float.MaxValue;
+            if (samplePoints == null || sampleCount <= 0)
+                return false;
+
+            sampleCount = Mathf.Min(sampleCount, Mathf.Min(samplePoints.Length, MaxStrokeSamples));
+            if (sampleCount <= 0)
+                return false;
+
             VRCPlayerApi.GetPlayers(players);
+            Vector3 sampleCenter = GetSampleCenter(samplePoints, sampleCount);
 
-            float bestDistance = float.MaxValue;
-            int bestPlayerId = -1;
-            int bestType = -1;
-            Vector3 bestPosition = Vector3.zero;
-            Quaternion bestRotation = Quaternion.identity;
+            int armPlayerId;
+            int armType;
+            float armDistance;
+            Vector3 armPosition;
+            Quaternion armRotation;
+            bool hasArm = FindBestArmSurface(samplePoints, sampleCount, sampleCenter, excludedHandMask,
+                out armPlayerId, out armType, out armDistance, out armPosition, out armRotation);
 
+            int headPlayerId;
+            int headType;
+            float headDistance;
+            Vector3 headPosition;
+            Quaternion headRotation;
+            bool hasHead = FindBestHeadRegion(samplePoints, sampleCount, sampleCenter,
+                out headPlayerId, out headType, out headDistance, out headPosition, out headRotation);
+
+            if (hasArm && armDistance <= surfaceBindingDistance &&
+                (!hasHead || armDistance + HandHeadPreferenceDistance <= headDistance))
+            {
+                playerId = armPlayerId;
+                bindingType = armType;
+                surfaceDistance = armDistance;
+                method = "手・腕";
+                bindingPosition = armPosition;
+                bindingRotation = armRotation;
+                return true;
+            }
+
+            if (hasHead)
+            {
+                playerId = headPlayerId;
+                bindingType = headType;
+                surfaceDistance = headDistance;
+                method = "頭の範囲";
+                bindingPosition = headPosition;
+                bindingRotation = headRotation;
+                return true;
+            }
+
+            bool hasBody = FindBestBodySurface(samplePoints, sampleCount, sampleCenter, excludedHandMask,
+                out playerId, out bindingType, out surfaceDistance, out bindingPosition, out bindingRotation);
+            lastNearestPlayerId = playerId;
+            lastNearestType = bindingType;
+            lastNearestDistance = surfaceDistance;
+            if (!hasBody || surfaceDistance > surfaceBindingDistance)
+            {
+                playerId = -1;
+                bindingType = -1;
+                method = "";
+                bindingPosition = Vector3.zero;
+                bindingRotation = Quaternion.identity;
+                return false;
+            }
+
+            method = "表面";
+            return true;
+        }
+
+        private bool FindBestArmSurface(Vector3[] samplePoints, int sampleCount, Vector3 sampleCenter,
+            int excludedHandMask, out int bestPlayerId, out int bestType, out float bestDistance,
+            out Vector3 bestPosition, out Quaternion bestRotation)
+        {
+            bestPlayerId = -1;
+            bestType = -1;
+            bestDistance = float.MaxValue;
+            bestPosition = Vector3.zero;
+            bestRotation = Quaternion.identity;
             for (int playerIndex = 0; playerIndex < players.Length; playerIndex++)
             {
                 VRCPlayerApi player = players[playerIndex];
-                if (!Utilities.IsValid(player))
+                if (!IsCandidatePlayer(player, sampleCenter))
                     continue;
 
-                if ((player.GetPosition() - samplePoint).sqrMagnitude > CandidatePlayerDistance * CandidatePlayerDistance)
+                bool foundHumanoidArm = false;
+                for (int boneValue = 0; boneValue < (int)HumanBodyBones.LastBone; boneValue++)
+                {
+                    if ((!IsLeftArmBone(boneValue) && !IsRightArmBone(boneValue)) ||
+                        (player.isLocal && IsArmExcluded(boneValue, excludedHandMask)))
+                        continue;
+
+                    Vector3 shapeStart;
+                    Vector3 shapeEnd;
+                    float shapeRadius;
+                    if (!TryGetBodyShape(player, boneValue, out shapeStart, out shapeEnd, out shapeRadius))
+                        continue;
+
+                    foundHumanoidArm = true;
+                    float distance = GetAverageSurfaceDistance(samplePoints, sampleCount,
+                        shapeStart, shapeEnd, shapeRadius);
+                    if (!ShouldReplaceCandidate(distance, player.playerId, boneValue,
+                            bestDistance, bestPlayerId, bestType))
+                        continue;
+
+                    bestDistance = distance;
+                    bestPlayerId = player.playerId;
+                    bestType = boneValue;
+                    bestPosition = player.GetBonePosition((HumanBodyBones)boneValue);
+                    bestRotation = player.GetBoneRotation((HumanBodyBones)boneValue);
+                }
+
+                if (foundHumanoidArm)
+                    continue;
+
+                float scale = GetAvatarScale(player);
+                ConsiderTrackingPoint(samplePoints, sampleCount, player, TrackingLeftHand,
+                    VRCPlayerApi.TrackingDataType.LeftHand, handRadius * scale,
+                    player.isLocal && (excludedHandMask & LeftHandMask) != 0,
+                    ref bestDistance, ref bestPlayerId, ref bestType, ref bestPosition, ref bestRotation);
+                ConsiderTrackingPoint(samplePoints, sampleCount, player, TrackingRightHand,
+                    VRCPlayerApi.TrackingDataType.RightHand, handRadius * scale,
+                    player.isLocal && (excludedHandMask & RightHandMask) != 0,
+                    ref bestDistance, ref bestPlayerId, ref bestType, ref bestPosition, ref bestRotation);
+            }
+            return bestPlayerId > 0;
+        }
+
+        private bool FindBestHeadRegion(Vector3[] samplePoints, int sampleCount, Vector3 sampleCenter,
+            out int bestPlayerId, out int bestType, out float bestSurfaceDistance,
+            out Vector3 bestPosition, out Quaternion bestRotation)
+        {
+            bestPlayerId = -1;
+            bestType = -1;
+            bestSurfaceDistance = float.MaxValue;
+            bestPosition = Vector3.zero;
+            bestRotation = Quaternion.identity;
+            int bestInsideCount = -1;
+            float bestCenterDistance = float.MaxValue;
+            for (int playerIndex = 0; playerIndex < players.Length; playerIndex++)
+            {
+                VRCPlayerApi player = players[playerIndex];
+                if (!IsCandidatePlayer(player, sampleCenter))
+                    continue;
+
+                Vector3 center;
+                Vector3 up;
+                int candidateType;
+                Vector3 candidatePosition;
+                Quaternion candidateRotation;
+                float scale;
+                if (!TryGetHeadReference(player, out center, out up, out candidateType,
+                        out candidatePosition, out candidateRotation, out scale))
+                    continue;
+
+                float averageCenterDistance;
+                float averageSurfaceDistance;
+                int insideCount = GetHeadRegionInsideCount(samplePoints, sampleCount, center, up, scale,
+                    out averageCenterDistance, out averageSurfaceDistance);
+                if (insideCount * 100 < sampleCount * HeadAccessoryRequiredPercent ||
+                    insideCount < bestInsideCount ||
+                    (insideCount == bestInsideCount && averageCenterDistance >= bestCenterDistance))
+                    continue;
+
+                bestPlayerId = player.playerId;
+                bestType = candidateType;
+                bestInsideCount = insideCount;
+                bestCenterDistance = averageCenterDistance;
+                bestSurfaceDistance = averageSurfaceDistance;
+                bestPosition = candidatePosition;
+                bestRotation = candidateRotation;
+            }
+            return bestPlayerId > 0;
+        }
+
+        private int GetHeadRegionInsideCount(Vector3[] samplePoints, int sampleCount,
+            Vector3 center, Vector3 up, float scale, out float averageCenterDistance,
+            out float averageSurfaceDistance)
+        {
+            int insideCount = 0;
+            float centerDistanceSum = 0f;
+            float surfaceDistanceSum = 0f;
+            float headSphereRadius = headRadius * scale;
+            float expandedHeadRadius = headSphereRadius + surfaceBindingDistance;
+            float bottom = HeadAccessoryBottom * scale;
+            float top = headAccessoryHeight * scale;
+            float accessoryRadius = headAccessoryRadius * scale;
+            for (int i = 0; i < sampleCount; i++)
+            {
+                Vector3 offset = samplePoints[i] - center;
+                float centerDistance = offset.magnitude;
+                centerDistanceSum += centerDistance;
+                surfaceDistanceSum += Mathf.Max(0f, centerDistance - headSphereRadius);
+                bool inside = centerDistance <= expandedHeadRadius;
+                if (!inside && enableHeadAccessories)
+                {
+                    float height = Vector3.Dot(offset, up);
+                    float axisDistance = (offset - up * height).magnitude;
+                    inside = height >= bottom && height <= top && axisDistance <= accessoryRadius;
+                }
+                if (inside)
+                    insideCount++;
+            }
+
+            averageCenterDistance = centerDistanceSum / sampleCount;
+            averageSurfaceDistance = surfaceDistanceSum / sampleCount;
+            return insideCount;
+        }
+
+        private bool FindBestBodySurface(Vector3[] samplePoints, int sampleCount, Vector3 sampleCenter,
+            int excludedHandMask, out int bestPlayerId, out int bestType, out float bestDistance,
+            out Vector3 bestPosition, out Quaternion bestRotation)
+        {
+            bestPlayerId = -1;
+            bestType = -1;
+            bestDistance = float.MaxValue;
+            bestPosition = Vector3.zero;
+            bestRotation = Quaternion.identity;
+            for (int playerIndex = 0; playerIndex < players.Length; playerIndex++)
+            {
+                VRCPlayerApi player = players[playerIndex];
+                if (!IsCandidatePlayer(player, sampleCenter))
                     continue;
 
                 bool foundHumanoidShape = false;
@@ -415,7 +655,8 @@ namespace Maaaaa.BodyQv
                         continue;
 
                     foundHumanoidShape = true;
-                    float distance = GetAverageSurfaceDistance(shapeStart, shapeEnd, shapeRadius, sampleCount);
+                    float distance = GetAverageSurfaceDistance(samplePoints, sampleCount,
+                        shapeStart, shapeEnd, shapeRadius);
                     if (!ShouldReplaceCandidate(distance, player.playerId, boneValue,
                             bestDistance, bestPlayerId, bestType))
                         continue;
@@ -431,18 +672,21 @@ namespace Maaaaa.BodyQv
                     continue;
 
                 float scale = GetAvatarScale(player);
-                ConsiderTrackingPoint(player, TrackingHead, VRCPlayerApi.TrackingDataType.Head,
-                    headRadius * scale, sampleCount, false,
+                ConsiderTrackingPoint(samplePoints, sampleCount, player, TrackingHead,
+                    VRCPlayerApi.TrackingDataType.Head, headRadius * scale, false,
                     ref bestDistance, ref bestPlayerId, ref bestType, ref bestPosition, ref bestRotation);
-                ConsiderTrackingPoint(player, TrackingLeftHand, VRCPlayerApi.TrackingDataType.LeftHand,
-                    handRadius * scale, sampleCount, player.isLocal && (excludedHandMask & LeftHandMask) != 0,
+                ConsiderTrackingPoint(samplePoints, sampleCount, player, TrackingLeftHand,
+                    VRCPlayerApi.TrackingDataType.LeftHand, handRadius * scale,
+                    player.isLocal && (excludedHandMask & LeftHandMask) != 0,
                     ref bestDistance, ref bestPlayerId, ref bestType, ref bestPosition, ref bestRotation);
-                ConsiderTrackingPoint(player, TrackingRightHand, VRCPlayerApi.TrackingDataType.RightHand,
-                    handRadius * scale, sampleCount, player.isLocal && (excludedHandMask & RightHandMask) != 0,
+                ConsiderTrackingPoint(samplePoints, sampleCount, player, TrackingRightHand,
+                    VRCPlayerApi.TrackingDataType.RightHand, handRadius * scale,
+                    player.isLocal && (excludedHandMask & RightHandMask) != 0,
                     ref bestDistance, ref bestPlayerId, ref bestType, ref bestPosition, ref bestRotation);
 
                 Vector3 originPosition = player.GetPosition();
-                float originDistance = GetAverageSurfaceDistance(originPosition, originPosition, 0f, sampleCount);
+                float originDistance = GetAverageSurfaceDistance(samplePoints, sampleCount,
+                    originPosition, originPosition, 0f);
                 if (ShouldReplaceCandidate(originDistance, player.playerId, PlayerOrigin,
                         bestDistance, bestPlayerId, bestType))
                 {
@@ -453,100 +697,22 @@ namespace Maaaaa.BodyQv
                     bestRotation = player.GetRotation();
                 }
             }
-
-            if (bestPlayerId > 0 && bestType >= 0 && bestDistance <= surfaceBindingDistance)
-            {
-                LogBindingResult(bestPlayerId, bestType, bestDistance, "表面");
-                SendCustomNetworkEvent(NetworkEventTarget.All, nameof(ReceiveBinding),
-                    penId, inkId, bestPlayerId, bestType, bestPosition, bestRotation);
-                return;
-            }
-
-            int nearestPlayerId = bestPlayerId;
-            int nearestType = bestType;
-            float nearestDistance = bestDistance;
-
-            if (enableHeadAccessories)
-            {
-                int accessoryPlayerId = -1;
-                int accessoryType = -1;
-                int accessoryInsideCount = -1;
-                float accessoryAxisDistance = float.MaxValue;
-                float accessorySurfaceDistance = float.MaxValue;
-                Vector3 accessoryPosition = Vector3.zero;
-                Quaternion accessoryRotation = Quaternion.identity;
-
-                for (int playerIndex = 0; playerIndex < players.Length; playerIndex++)
-                {
-                    VRCPlayerApi player = players[playerIndex];
-                    if (!Utilities.IsValid(player) ||
-                        (player.GetPosition() - samplePoint).sqrMagnitude > CandidatePlayerDistance * CandidatePlayerDistance)
-                        continue;
-
-                    Vector3 center;
-                    Vector3 up;
-                    int bindingType;
-                    Vector3 bindingPosition;
-                    Quaternion bindingRotation;
-                    float scale;
-                    if (!TryGetHeadReference(player, out center, out up, out bindingType,
-                            out bindingPosition, out bindingRotation, out scale))
-                        continue;
-
-                    float averageAxisDistance;
-                    int insideCount = GetHeadAccessoryInsideCount(center, up, scale, sampleCount,
-                        out averageAxisDistance);
-                    if (insideCount * 100 < sampleCount * HeadAccessoryRequiredPercent)
-                        continue;
-
-                    if (insideCount < accessoryInsideCount ||
-                        (insideCount == accessoryInsideCount && averageAxisDistance >= accessoryAxisDistance))
-                        continue;
-
-                    accessoryPlayerId = player.playerId;
-                    accessoryType = bindingType;
-                    accessoryInsideCount = insideCount;
-                    accessoryAxisDistance = averageAxisDistance;
-                    accessorySurfaceDistance = GetAverageSurfaceDistance(center, center,
-                        headRadius * scale, sampleCount);
-                    accessoryPosition = bindingPosition;
-                    accessoryRotation = bindingRotation;
-                }
-
-                if (accessoryPlayerId > 0)
-                {
-                    LogBindingResult(accessoryPlayerId, accessoryType, accessorySurfaceDistance,
-                        "頭の飾りの範囲");
-                    SendCustomNetworkEvent(NetworkEventTarget.All, nameof(ReceiveBinding),
-                        penId, inkId, accessoryPlayerId, accessoryType,
-                        accessoryPosition, accessoryRotation);
-                    return;
-                }
-            }
-
-            LogNoBinding(nearestPlayerId, nearestType, nearestDistance);
+            return bestPlayerId > 0;
         }
 
-        private int GetHeadAccessoryInsideCount(Vector3 center, Vector3 up, float scale,
-            int sampleCount, out float averageAxisDistance)
+        private bool IsCandidatePlayer(VRCPlayerApi player, Vector3 sampleCenter)
         {
-            int insideCount = 0;
-            float axisDistanceSum = 0f;
-            float bottom = HeadAccessoryBottom * scale;
-            float top = headAccessoryHeight * scale;
-            float radius = headAccessoryRadius * scale;
-            for (int i = 0; i < sampleCount; i++)
-            {
-                Vector3 offset = strokeSamplePoints[i] - center;
-                float height = Vector3.Dot(offset, up);
-                float axisDistance = (offset - up * height).magnitude;
-                axisDistanceSum += axisDistance;
-                if (height >= bottom && height <= top && axisDistance <= radius)
-                    insideCount++;
-            }
+            return Utilities.IsValid(player) &&
+                   (player.GetPosition() - sampleCenter).sqrMagnitude <=
+                   CandidatePlayerDistance * CandidatePlayerDistance;
+        }
 
-            averageAxisDistance = sampleCount > 0 ? axisDistanceSum / sampleCount : float.MaxValue;
-            return insideCount;
+        private Vector3 GetSampleCenter(Vector3[] samplePoints, int sampleCount)
+        {
+            Vector3 center = Vector3.zero;
+            for (int i = 0; i < sampleCount; i++)
+                center += samplePoints[i];
+            return center / sampleCount;
         }
 
         private void LogBindingResult(int playerId, int bindingType, float surfaceDistance, string method)
@@ -594,8 +760,9 @@ namespace Maaaaa.BodyQv
             return "不明";
         }
 
-        private void ConsiderTrackingPoint(VRCPlayerApi player, int bindingType,
-            VRCPlayerApi.TrackingDataType trackingType, float radius, int sampleCount, bool excluded,
+        private void ConsiderTrackingPoint(Vector3[] samplePoints, int sampleCount,
+            VRCPlayerApi player, int bindingType,
+            VRCPlayerApi.TrackingDataType trackingType, float radius, bool excluded,
             ref float bestDistance, ref int bestPlayerId, ref int bestType,
             ref Vector3 bestPosition, ref Quaternion bestRotation)
         {
@@ -603,7 +770,8 @@ namespace Maaaaa.BodyQv
                 return;
 
             VRCPlayerApi.TrackingData trackingData = player.GetTrackingData(trackingType);
-            float distance = GetAverageSurfaceDistance(trackingData.position, trackingData.position, radius, sampleCount);
+            float distance = GetAverageSurfaceDistance(samplePoints, sampleCount,
+                trackingData.position, trackingData.position, radius);
             if (!ShouldReplaceCandidate(distance, player.playerId, bindingType,
                     bestDistance, bestPlayerId, bestType))
                 return;
@@ -630,12 +798,13 @@ namespace Maaaaa.BodyQv
             return sampleCount;
         }
 
-        private float GetAverageSurfaceDistance(Vector3 start, Vector3 end, float radius, int sampleCount)
+        private float GetAverageSurfaceDistance(Vector3[] samplePoints, int sampleCount,
+            Vector3 start, Vector3 end, float radius)
         {
             float distanceSum = 0f;
             for (int i = 0; i < sampleCount; i++)
             {
-                Vector3 point = strokeSamplePoints[i];
+                Vector3 point = samplePoints[i];
                 float centerDistance = Vector3.Distance(point, ClosestPointOnSegment(point, start, end));
                 distanceSum += Mathf.Max(0f, centerDistance - radius);
             }
@@ -749,8 +918,25 @@ namespace Maaaaa.BodyQv
                 case HumanBodyBones.Chest:
                 case HumanBodyBones.UpperChest:
                     radius = torsoRadius * scale;
+                    bool endsAtNeck = bone == HumanBodyBones.UpperChest;
                     if (bone == HumanBodyBones.Chest && end == Vector3.zero)
+                    {
                         end = player.GetBonePosition(HumanBodyBones.Neck);
+                        endsAtNeck = true;
+                    }
+                    if (endsAtNeck && end != Vector3.zero)
+                    {
+                        Vector3 torsoDirection = end - start;
+                        if (torsoDirection.sqrMagnitude > 0.000001f)
+                        {
+                            torsoDirection.Normalize();
+                            Vector3 shortenedEnd = end - torsoDirection *
+                                Mathf.Max(0f, radius - neckRadius * scale);
+                            end = Vector3.Dot(shortenedEnd - start, torsoDirection) >= 0f
+                                ? shortenedEnd
+                                : start;
+                        }
+                    }
                     break;
                 case HumanBodyBones.Neck:
                     radius = neckRadius * scale;
