@@ -89,7 +89,7 @@ namespace Maaaaa.BodyQv
         private float neckRadius = 0.06f;
 
         [SerializeField, Tooltip("身長 1.3 m のアバターに対する頭の半径です。")]
-        private float headRadius = 0.11f;
+        private float headRadius = 0.09f;
 
         [SerializeField, Tooltip("身長 1.3 m のアバターに対する上腕の半径です。")]
         private float upperArmRadius = 0.075f;
@@ -600,21 +600,25 @@ namespace Maaaaa.BodyQv
             int insideCount = 0;
             float centerDistanceSum = 0f;
             float surfaceDistanceSum = 0f;
-            float headSphereRadius = headRadius * scale;
-            float expandedHeadRadius = headSphereRadius + surfaceBindingDistance;
+            float headShapeRadius = headRadius * scale;
+            Vector3 headShapeStart = center - up * (0.01f * scale);
+            Vector3 headShapeEnd = center + up * (0.05f * scale);
+            float expandedHeadRadius = headShapeRadius + surfaceBindingDistance;
             float bottom = HeadAccessoryBottom * scale;
             float top = headAccessoryHeight * scale;
             float accessoryRadius = headAccessoryRadius * scale;
             for (int i = 0; i < sampleCount; i++)
             {
                 Vector3 offset = samplePoints[i] - center;
-                float centerDistance = offset.magnitude;
+                float height = Vector3.Dot(offset, up);
+                float centerDistance = Vector3.Distance(samplePoints[i],
+                    ClosestPointOnSegment(samplePoints[i], headShapeStart, headShapeEnd));
                 centerDistanceSum += centerDistance;
-                surfaceDistanceSum += Mathf.Max(0f, centerDistance - headSphereRadius);
-                bool inside = centerDistance <= expandedHeadRadius;
+                surfaceDistanceSum += Mathf.Max(0f, centerDistance - headShapeRadius);
+                bool inside = centerDistance <= headShapeRadius ||
+                              (height >= 0f && centerDistance <= expandedHeadRadius);
                 if (!inside && enableHeadAccessories)
                 {
-                    float height = Vector3.Dot(offset, up);
                     float axisDistance = (offset - up * height).magnitude;
                     inside = height >= bottom && height <= top && axisDistance <= accessoryRadius;
                 }
@@ -946,7 +950,9 @@ namespace Maaaaa.BodyQv
                     Vector3 headUp;
                     if (!TryGetHumanoidHeadFrame(player, scale, out start, out headUp))
                         return false;
-                    end = start;
+                    Vector3 headCenter = start;
+                    start = headCenter - headUp * (0.01f * scale);
+                    end = headCenter + headUp * (0.05f * scale);
                     break;
                 case HumanBodyBones.LeftShoulder:
                 case HumanBodyBones.RightShoulder:
