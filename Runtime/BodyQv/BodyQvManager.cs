@@ -6,7 +6,7 @@ using VRC.SDKBase;
 using VRC.Udon.Common.Interfaces;
 using Utilities = VRC.SDKBase.Utilities;
 
-namespace Maaaaa.BodyQv
+namespace Maaaaa.EXQv
 {
     [DefaultExecutionOrder(-100)]
     [UdonBehaviourSyncMode(BehaviourSyncMode.Manual)]

@@ -1,4 +1,4 @@
-namespace Maaaaa.BodyQv.Editor
+namespace Maaaaa.EXQv.Editor
 {
     internal static class BodyQvStrings
     {

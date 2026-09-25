@@ -1,11 +1,11 @@
 using System.Collections.Generic;
-using Maaaaa.BodyQv;
+using Maaaaa.EXQv;
 using QvPen.UdonScript;
 using UnityEditor;
 using UnityEngine;
 using VRC.SDKBase;
 
-namespace Maaaaa.BodyQv.Editor
+namespace Maaaaa.EXQv.Editor
 {
     [CustomEditor(typeof(BodyQvManager))]
     public class BodyQvManagerEditor : UnityEditor.Editor

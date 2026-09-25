@@ -1,6 +1,6 @@
 {
-    "name": "net.maaaaa.bodyqv.Editor",
-    "rootNamespace": "Maaaaa.BodyQv.Editor",
+    "name": "net.maaaaa.exqv.Editor",
+    "rootNamespace": "Maaaaa.EXQv.Editor",
     "references": [
         "GUID:4cb62d48fcc7df143b75a0e32b04ede1",
         "GUID:207f5b9649b111a41872013525689428",

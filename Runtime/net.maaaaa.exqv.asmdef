@@ -1,6 +1,6 @@
 {
-    "name": "net.maaaaa.bodyqv",
-    "rootNamespace": "Maaaaa.BodyQv",
+    "name": "net.maaaaa.exqv",
+    "rootNamespace": "Maaaaa.EXQv",
     "references": [
         "GUID:207f5b9649b111a41872013525689428",
         "GUID:99835874ee819da44948776e0df4ff1d",
