@@ -17,6 +17,17 @@ namespace Maaaaa.EXQv
         public GrabQvManager Manager => manager;
         public QvPen_PenManager Pen => pen;
 
+        private void Start()
+        {
+            SendCustomEventDelayedFrames(nameof(ResetUprightRotation), 2);
+        }
+
+        public void ResetUprightRotation()
+        {
+            Vector3 localAngles = transform.localEulerAngles;
+            transform.localRotation = Quaternion.Euler(0f, localAngles.y, 0f);
+        }
+
         public override void Interact()
         {
             if (manager != null && pen != null)

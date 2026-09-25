@@ -630,6 +630,9 @@ namespace Maaaaa.EXQv
             handleAssignedTimes[index] = 0f;
             handleEmptySince[index] = -1f;
             handleSawInk[index] = false;
+            VRCPlayerApi localPlayer = Networking.LocalPlayer;
+            if (Utilities.IsValid(localPlayer) && Utilities.IsValid(handleObjects[index]))
+                Networking.SetOwner(localPlayer, handleObjects[index]);
             MoveHandle(index, handleHomePositions[index], handleHomeRotations[index]);
             Log(GrabQvStrings.ReleasedLog + objectId);
         }

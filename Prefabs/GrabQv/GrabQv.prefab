@@ -784,9 +784,9 @@ RotationConstraint:
   m_Weight: 1
   m_RotationAtRest: {x: 0, y: 0, z: 0}
   m_RotationOffset: {x: 0, y: 0, z: 0}
-  m_AffectRotationX: 1
+  m_AffectRotationX: 0
   m_AffectRotationY: 1
-  m_AffectRotationZ: 1
+  m_AffectRotationZ: 0
   m_Active: 1
   m_IsLocked: 1
   m_Sources:
@@ -1284,9 +1284,9 @@ RotationConstraint:
   m_Weight: 1
   m_RotationAtRest: {x: 0, y: 0, z: 0}
   m_RotationOffset: {x: 0, y: 0, z: 0}
-  m_AffectRotationX: 1
+  m_AffectRotationX: 0
   m_AffectRotationY: 1
-  m_AffectRotationZ: 1
+  m_AffectRotationZ: 0
   m_Active: 1
   m_IsLocked: 1
   m_Sources:
@@ -1522,9 +1522,9 @@ RotationConstraint:
   m_Weight: 1
   m_RotationAtRest: {x: 0, y: 0, z: 0}
   m_RotationOffset: {x: 0, y: 0, z: 0}
-  m_AffectRotationX: 1
+  m_AffectRotationX: 0
   m_AffectRotationY: 1
-  m_AffectRotationZ: 1
+  m_AffectRotationZ: 0
   m_Active: 1
   m_IsLocked: 1
   m_Sources:
@@ -1779,9 +1779,9 @@ RotationConstraint:
   m_Weight: 1
   m_RotationAtRest: {x: 0, y: 0, z: 0}
   m_RotationOffset: {x: 0, y: 0, z: 0}
-  m_AffectRotationX: 1
+  m_AffectRotationX: 0
   m_AffectRotationY: 1
-  m_AffectRotationZ: 1
+  m_AffectRotationZ: 0
   m_Active: 1
   m_IsLocked: 1
   m_Sources:
@@ -1936,9 +1936,9 @@ RotationConstraint:
   m_Weight: 1
   m_RotationAtRest: {x: 0, y: 0, z: 0}
   m_RotationOffset: {x: 0, y: 0, z: 0}
-  m_AffectRotationX: 1
+  m_AffectRotationX: 0
   m_AffectRotationY: 1
-  m_AffectRotationZ: 1
+  m_AffectRotationZ: 0
   m_Active: 1
   m_IsLocked: 1
   m_Sources:
@@ -2350,9 +2350,9 @@ RotationConstraint:
   m_Weight: 1
   m_RotationAtRest: {x: 0, y: 0, z: 0}
   m_RotationOffset: {x: 0, y: 0, z: 0}
-  m_AffectRotationX: 1
+  m_AffectRotationX: 0
   m_AffectRotationY: 1
-  m_AffectRotationZ: 1
+  m_AffectRotationZ: 0
   m_Active: 1
   m_IsLocked: 1
   m_Sources:
@@ -2621,9 +2621,9 @@ RotationConstraint:
   m_Weight: 1
   m_RotationAtRest: {x: 0, y: 0, z: 0}
   m_RotationOffset: {x: 0, y: 0, z: 0}
-  m_AffectRotationX: 1
+  m_AffectRotationX: 0
   m_AffectRotationY: 1
-  m_AffectRotationZ: 1
+  m_AffectRotationZ: 0
   m_Active: 1
   m_IsLocked: 1
   m_Sources:
@@ -2981,9 +2981,9 @@ RotationConstraint:
   m_Weight: 1
   m_RotationAtRest: {x: 0, y: 0, z: 0}
   m_RotationOffset: {x: 0, y: 0, z: 0}
-  m_AffectRotationX: 1
+  m_AffectRotationX: 0
   m_AffectRotationY: 1
-  m_AffectRotationZ: 1
+  m_AffectRotationZ: 0
   m_Active: 1
   m_IsLocked: 1
   m_Sources:
@@ -3771,9 +3771,9 @@ RotationConstraint:
   m_Weight: 1
   m_RotationAtRest: {x: 0, y: 0, z: 0}
   m_RotationOffset: {x: 0, y: 0, z: 0}
-  m_AffectRotationX: 1
+  m_AffectRotationX: 0
   m_AffectRotationY: 1
-  m_AffectRotationZ: 1
+  m_AffectRotationZ: 0
   m_Active: 1
   m_IsLocked: 1
   m_Sources:
@@ -4366,9 +4366,9 @@ RotationConstraint:
   m_Weight: 1
   m_RotationAtRest: {x: 0, y: 0, z: 0}
   m_RotationOffset: {x: 0, y: 0, z: 0}
-  m_AffectRotationX: 1
+  m_AffectRotationX: 0
   m_AffectRotationY: 1
-  m_AffectRotationZ: 1
+  m_AffectRotationZ: 0
   m_Active: 1
   m_IsLocked: 1
   m_Sources:
@@ -4523,9 +4523,9 @@ RotationConstraint:
   m_Weight: 1
   m_RotationAtRest: {x: 0, y: 0, z: 0}
   m_RotationOffset: {x: 0, y: 0, z: 0}
-  m_AffectRotationX: 1
+  m_AffectRotationX: 0
   m_AffectRotationY: 1
-  m_AffectRotationZ: 1
+  m_AffectRotationZ: 0
   m_Active: 1
   m_IsLocked: 1
   m_Sources:
@@ -4937,9 +4937,9 @@ RotationConstraint:
   m_Weight: 1
   m_RotationAtRest: {x: 0, y: 0, z: 0}
   m_RotationOffset: {x: 0, y: 0, z: 0}
-  m_AffectRotationX: 1
+  m_AffectRotationX: 0
   m_AffectRotationY: 1
-  m_AffectRotationZ: 1
+  m_AffectRotationZ: 0
   m_Active: 1
   m_IsLocked: 1
   m_Sources:
@@ -5322,9 +5322,9 @@ RotationConstraint:
   m_Weight: 1
   m_RotationAtRest: {x: 0, y: 0, z: 0}
   m_RotationOffset: {x: 0, y: 0, z: 0}
-  m_AffectRotationX: 1
+  m_AffectRotationX: 0
   m_AffectRotationY: 1
-  m_AffectRotationZ: 1
+  m_AffectRotationZ: 0
   m_Active: 1
   m_IsLocked: 1
   m_Sources:
@@ -5917,9 +5917,9 @@ RotationConstraint:
   m_Weight: 1
   m_RotationAtRest: {x: 0, y: 0, z: 0}
   m_RotationOffset: {x: 0, y: 0, z: 0}
-  m_AffectRotationX: 1
+  m_AffectRotationX: 0
   m_AffectRotationY: 1
-  m_AffectRotationZ: 1
+  m_AffectRotationZ: 0
   m_Active: 1
   m_IsLocked: 1
   m_Sources:
@@ -6074,9 +6074,9 @@ RotationConstraint:
   m_Weight: 1
   m_RotationAtRest: {x: 0, y: 0, z: 0}
   m_RotationOffset: {x: 0, y: 0, z: 0}
-  m_AffectRotationX: 1
+  m_AffectRotationX: 0
   m_AffectRotationY: 1
-  m_AffectRotationZ: 1
+  m_AffectRotationZ: 0
   m_Active: 1
   m_IsLocked: 1
   m_Sources:
@@ -8310,7 +8310,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 7259507218960721137, guid: 2674f268860583949b53b63df24489ea, type: 3}
       propertyPath: m_LocalPosition.y
-      value: 0.8
+      value: 0
       objectReference: {fileID: 0}
     - target: {fileID: 7259507218960721137, guid: 2674f268860583949b53b63df24489ea, type: 3}
       propertyPath: m_LocalPosition.z

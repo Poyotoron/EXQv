@@ -401,11 +401,13 @@ namespace Maaaaa.EXQv
                     out playerId, out bindingType, out surfaceDistance, out method,
                     out bindingPosition, out bindingRotation))
             {
-                LogNoBinding(lastNearestPlayerId, lastNearestType, lastNearestDistance);
+                LogNoBinding(lastNearestPlayerId, lastNearestType, lastNearestDistance,
+                    strokeSamplePoints, sampleCount, excludedHandMask);
                 return;
             }
 
-            LogBindingResult(playerId, bindingType, surfaceDistance, method);
+            LogBindingResult(playerId, bindingType, surfaceDistance, method,
+                strokeSamplePoints, sampleCount, excludedHandMask);
             SendCustomNetworkEvent(NetworkEventTarget.All, nameof(ReceiveBinding),
                 penId, inkId, playerId, bindingType, bindingPosition, bindingRotation);
         }
@@ -826,7 +828,8 @@ namespace Maaaaa.EXQv
             return center / sampleCount;
         }
 
-        private void LogBindingResult(int playerId, int bindingType, float surfaceDistance, string method)
+        private void LogBindingResult(int playerId, int bindingType, float surfaceDistance, string method,
+            Vector3[] samplePoints, int sampleCount, int excludedHandMask)
         {
             if (!logBindingResults)
                 return;
@@ -835,17 +838,20 @@ namespace Maaaaa.EXQv
             string playerName = Utilities.IsValid(player) ? player.displayName : "不明";
             Debug.Log("[BodyQv] 付け先: " + playerName + " (ID " + playerId + ") / 部位: " +
                       GetBindingTypeName(bindingType) + " / 平均の表面距離: " + surfaceDistance +
-                      " m / 決め方: " + method);
+                      " m / 決め方: " + method +
+                      GetBindingDiagnostics(samplePoints, sampleCount, excludedHandMask));
         }
 
-        private void LogNoBinding(int playerId, int bindingType, float surfaceDistance)
+        private void LogNoBinding(int playerId, int bindingType, float surfaceDistance,
+            Vector3[] samplePoints, int sampleCount, int excludedHandMask)
         {
             if (!logBindingResults)
                 return;
 
+            string diagnostics = GetBindingDiagnostics(samplePoints, sampleCount, excludedHandMask);
             if (playerId <= 0 || bindingType < 0 || surfaceDistance == float.MaxValue)
             {
-                Debug.Log("[BodyQv] 紐付けなし / 最も近い部位: なし");
+                Debug.Log("[BodyQv] 紐付けなし / 最も近い部位: なし" + diagnostics);
                 return;
             }
 
@@ -853,7 +859,157 @@ namespace Maaaaa.EXQv
             string playerName = Utilities.IsValid(player) ? player.displayName : "不明";
             Debug.Log("[BodyQv] 紐付けなし / 最も近い付け先: " + playerName + " (ID " + playerId +
                       ") / 部位: " + GetBindingTypeName(bindingType) + " / 平均の表面距離: " +
-                      surfaceDistance + " m");
+                      surfaceDistance + " m" + diagnostics);
+        }
+
+        private string GetBindingDiagnostics(Vector3[] samplePoints, int sampleCount, int excludedHandMask)
+        {
+            if (samplePoints == null || sampleCount <= 0)
+                return "";
+
+            sampleCount = Mathf.Min(sampleCount, samplePoints.Length);
+            Vector3 sampleCenter = GetSampleCenter(samplePoints, sampleCount);
+            Vector3 strokeStart = samplePoints[0];
+            VRCPlayerApi nearestHeadPlayer = null;
+            Vector3 nearestHeadCenter = Vector3.zero;
+            Vector3 nearestHeadUp = Vector3.up;
+            float nearestHeadScale = 1f;
+            float nearestHeadStartDistance = float.MaxValue;
+
+            float firstDistance = float.MaxValue;
+            float secondDistance = float.MaxValue;
+            float thirdDistance = float.MaxValue;
+            string firstName = "なし";
+            string secondName = "なし";
+            string thirdName = "なし";
+
+            for (int playerIndex = 0; playerIndex < players.Length; playerIndex++)
+            {
+                VRCPlayerApi player = players[playerIndex];
+                if (!IsCandidatePlayer(player, sampleCenter))
+                    continue;
+
+                Vector3 headCenter;
+                Vector3 headUp;
+                int headType;
+                Vector3 headPosition;
+                Quaternion headRotation;
+                float headScale;
+                if (TryGetHeadReference(player, out headCenter, out headUp, out headType,
+                        out headPosition, out headRotation, out headScale))
+                {
+                    Vector3 headShapeStart = headCenter - headUp * (0.01f * headScale);
+                    Vector3 headShapeEnd = headCenter + headUp * (0.05f * headScale);
+                    float startDistance = Mathf.Max(0f,
+                        Vector3.Distance(strokeStart,
+                            ClosestPointOnSegment(strokeStart, headShapeStart, headShapeEnd)) -
+                        headRadius * headScale);
+                    if (startDistance < nearestHeadStartDistance)
+                    {
+                        nearestHeadPlayer = player;
+                        nearestHeadCenter = headCenter;
+                        nearestHeadUp = headUp;
+                        nearestHeadScale = headScale;
+                        nearestHeadStartDistance = startDistance;
+                    }
+                }
+
+                for (int boneValue = 0; boneValue < (int)HumanBodyBones.LastBone; boneValue++)
+                {
+                    if ((player.isLocal && IsArmExcluded(boneValue, excludedHandMask)) ||
+                        !IsSupportedShapeBone(boneValue))
+                        continue;
+
+                    Vector3 shapeStart;
+                    Vector3 shapeEnd;
+                    float shapeRadius;
+                    if (!TryGetBodyShape(player, boneValue, out shapeStart, out shapeEnd, out shapeRadius))
+                        continue;
+
+                    float distance = GetAverageSurfaceDistance(samplePoints, sampleCount,
+                        shapeStart, shapeEnd, shapeRadius);
+                    AddSurfaceDiagnostic(distance, player.displayName + "/" + GetBindingTypeName(boneValue),
+                        ref firstDistance, ref firstName, ref secondDistance, ref secondName,
+                        ref thirdDistance, ref thirdName);
+                }
+            }
+
+            string headDetails = " / 始点に最も近い頭: なし";
+            if (Utilities.IsValid(nearestHeadPlayer))
+            {
+                Vector3 neck = nearestHeadPlayer.GetBonePosition(HumanBodyBones.Neck);
+                Vector3 heightOrigin = neck != Vector3.zero ? neck : nearestHeadCenter;
+                float minimumHeight = neck != Vector3.zero ? 0f :
+                    HeadStartFallbackMinimumHeight * nearestHeadScale;
+                bool allAboveNeck = true;
+                for (int i = 0; i < sampleCount; i++)
+                {
+                    if (Vector3.Dot(samplePoints[i] - heightOrigin, nearestHeadUp) >= minimumHeight)
+                        continue;
+                    allAboveNeck = false;
+                    break;
+                }
+
+                float averageCenterDistance;
+                float averageSurfaceDistance;
+                int insideCount = GetHeadRegionInsideCount(samplePoints, sampleCount,
+                    nearestHeadCenter, nearestHeadUp, nearestHeadScale,
+                    out averageCenterDistance, out averageSurfaceDistance);
+                float startHeight = Vector3.Dot(strokeStart - nearestHeadCenter, nearestHeadUp);
+                int insidePercent = insideCount * 100 / sampleCount;
+                headDetails = " / 始点に最も近い頭: " + nearestHeadPlayer.displayName +
+                              " (ID " + nearestHeadPlayer.playerId + ")" +
+                              " / 始点と頭表面: " + ToCentimeters(nearestHeadStartDistance) + " cm" +
+                              " / 始点高さ: " + ToCentimeters(startHeight) + " cm" +
+                              " (身長比補正: " + ToCentimeters(startHeight / nearestHeadScale) + " cm)" +
+                              " / 全点が首より上: " + (allAboveNeck ? "はい" : "いいえ") +
+                              " / 頭範囲: " + insidePercent + "%" +
+                              " / 頭表面の平均: " + ToCentimeters(averageSurfaceDistance) + " cm" +
+                              " / 身長比: " + nearestHeadScale;
+            }
+
+            return headDetails + " / 表面距離上位3: " +
+                   FormatSurfaceDiagnostic(firstName, firstDistance) + ", " +
+                   FormatSurfaceDiagnostic(secondName, secondDistance) + ", " +
+                   FormatSurfaceDiagnostic(thirdName, thirdDistance);
+        }
+
+        private void AddSurfaceDiagnostic(float distance, string name,
+            ref float firstDistance, ref string firstName,
+            ref float secondDistance, ref string secondName,
+            ref float thirdDistance, ref string thirdName)
+        {
+            if (distance < firstDistance)
+            {
+                thirdDistance = secondDistance;
+                thirdName = secondName;
+                secondDistance = firstDistance;
+                secondName = firstName;
+                firstDistance = distance;
+                firstName = name;
+            }
+            else if (distance < secondDistance)
+            {
+                thirdDistance = secondDistance;
+                thirdName = secondName;
+                secondDistance = distance;
+                secondName = name;
+            }
+            else if (distance < thirdDistance)
+            {
+                thirdDistance = distance;
+                thirdName = name;
+            }
+        }
+
+        private string FormatSurfaceDiagnostic(string name, float distance)
+        {
+            return distance == float.MaxValue ? "なし" : name + " " + ToCentimeters(distance) + " cm";
+        }
+
+        private float ToCentimeters(float meters)
+        {
+            return Mathf.Round(meters * 10000f) / 100f;
         }
 
         private string GetBindingTypeName(int bindingType)

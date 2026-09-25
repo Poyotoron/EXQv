@@ -179,6 +179,7 @@ namespace Maaaaa.EXQv.Editor
             Undo.RegisterCreatedObjectUndo(button, GrabQvStrings.CreateSplitButtons);
             button.transform.SetParent(parent, false);
             button.transform.localScale = Vector3.one * 0.05f;
+            button.transform.localRotation = Quaternion.identity;
             BoxCollider collider = button.AddComponent<BoxCollider>();
             collider.isTrigger = true;
             collider.size = new Vector3(1f, 1f, 0.02f);
@@ -190,6 +191,9 @@ namespace Maaaaa.EXQv.Editor
             position.constraintActive = true;
             RotationConstraint rotation = button.AddComponent<RotationConstraint>();
             rotation.AddSource(new ConstraintSource { sourceTransform = pickup.transform, weight = 1f });
+            rotation.rotationAxis = Axis.Y;
+            rotation.rotationAtRest = Vector3.zero;
+            rotation.rotationOffset = Vector3.zero;
             rotation.locked = true;
             rotation.constraintActive = true;
 
