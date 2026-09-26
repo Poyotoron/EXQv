@@ -28,6 +28,8 @@ namespace Maaaaa.EXQv
         private const float HeldHandleSyncTimeout = 1f;
         private const float HeldHandleMoveDistance = 0.001f;
         private const float HeldHandleMoveAngle = 0.1f;
+        private const float EraseSendTimeout = 10f;
+        public const float EraseSyncSafetyDelay = 1f;
         private const int ObjectSequenceRange = 1000000;
         private const int MaxCombinedStates = 256;
         private const int StateNone = 0;
@@ -54,6 +56,10 @@ namespace Maaaaa.EXQv
 
         [SerializeField, InspectorName(GrabQvStrings.LogResultsLabel)]
         private bool logResults;
+
+        [SerializeField, InspectorName(GrabQvStrings.ToggleGrabLabel),
+         Tooltip(GrabQvStrings.ToggleGrabTooltip)]
+        private bool toggleGrab = true;
 
         [SerializeField, HideInInspector]
         private GameObject[] handleObjects = new GameObject[0];
@@ -126,6 +132,19 @@ namespace Maaaaa.EXQv
         private float[] pendingRequestTimes = new float[MaxPendingRequests];
         private int pendingRequestCount;
 
+        private int[] erasePenIndexes = new int[MaxBindings];
+        private Vector3[] erasePenIdVectors = new Vector3[MaxBindings];
+        private Vector3[] eraseInkIdVectors = new Vector3[MaxBindings];
+        private LineRenderer[] eraseLines = new LineRenderer[MaxBindings];
+        private bool[] eraseOwnedByLocal = new bool[MaxBindings];
+        private bool[] eraseWasSent = new bool[MaxBindings];
+        private float[] eraseSendStartedTimes = new float[MaxBindings];
+        private int eraseCount;
+        private bool[] eraseActive = new bool[0];
+        private bool[] eraseLastAcceptedWasLocal = new bool[0];
+        private float[] eraseLastAcceptedTimes = new float[0];
+        private bool[] eraseHasAccepted = new bool[0];
+
         private float nextHandleCleanupTime;
 
         private bool[] combinedPens = new bool[0];
@@ -189,6 +208,10 @@ namespace Maaaaa.EXQv
             InitializeCombinedPens();
             InitializeHandles();
             currentObjectIds = new int[targetedPens.Length];
+            eraseActive = new bool[targetedPens.Length];
+            eraseLastAcceptedWasLocal = new bool[targetedPens.Length];
+            eraseLastAcceptedTimes = new float[targetedPens.Length];
+            eraseHasAccepted = new bool[targetedPens.Length];
             poolChildCounts = new int[targetLateSyncs.Length * 2];
             poolLastChildren = new Transform[targetLateSyncs.Length * 2];
             for (int i = 0; i < poolChildCounts.Length; i++)
@@ -219,6 +242,7 @@ namespace Maaaaa.EXQv
 
         public override void PostLateUpdate()
         {
+            ProcessSplitErases();
             ProcessPendingInks();
             framePoseCount = 0;
             ProcessHandleChanges();
@@ -288,6 +312,270 @@ namespace Maaaaa.EXQv
 
             ReceiveSplit(penIndex);
             SendCustomNetworkEvent(NetworkEventTarget.Others, nameof(ReceiveSplit), penIndex);
+        }
+
+        public void EraseLatestGroup(QvPen_PenManager pen)
+        {
+            int penIndex = FindTargetPen(pen);
+            VRCPlayerApi localPlayer = Networking.LocalPlayer;
+            if (penIndex < 0 || !Utilities.IsValid(localPlayer))
+                return;
+
+            int newestInkId = int.MinValue;
+            LineRenderer newestLine = null;
+            Vector3 newestPenIdVector = Vector3.zero;
+            Vector3 newestInkIdVector = Vector3.zero;
+            QvPen_LateSync lateSync = targetLateSyncs[penIndex];
+            if (!Utilities.IsValid(lateSync))
+                return;
+            FindNewestLocalInk(lateSync.InkPoolSynced, penIndex, localPlayer.playerId, ref newestInkId,
+                ref newestLine, ref newestPenIdVector, ref newestInkIdVector);
+            FindNewestLocalInk(lateSync.InkPoolNotSynced, penIndex, localPlayer.playerId, ref newestInkId,
+                ref newestLine, ref newestPenIdVector, ref newestInkIdVector);
+            if (!Utilities.IsValid(newestLine))
+                return;
+
+            int bindingIndex = FindBinding(QvPenUtilities.Vector3ToInt32(newestPenIdVector), newestInkId);
+            int objectId = bindingIndex >= 0 ? bindingObjectIds[bindingIndex] : 0;
+            int startCount = eraseCount;
+            int otherCount = 0;
+            if (objectId != 0)
+            {
+                for (int pass = 0; pass < 2; pass++)
+                {
+                    for (int i = 0; i < bindingCount; i++)
+                    {
+                        if (bindingPenIndexes[i] != penIndex || bindingObjectIds[i] != objectId ||
+                            !Utilities.IsValid(bindingLines[i]) || IsQueuedForErase(penIndex, bindingLines[i]))
+                            continue;
+                        bool ownedByLocal = IsLineOwnedBy(bindingLines[i], localPlayer.playerId);
+                        if ((pass == 0 && ownedByLocal) || (pass == 1 && !ownedByLocal))
+                            continue;
+                        if (AppendErase(penIndex, bindingLines[i], ownedByLocal) && !ownedByLocal)
+                            otherCount++;
+                    }
+                }
+            }
+            else
+            {
+                AppendErase(penIndex, newestLine, true);
+            }
+
+            int added = eraseCount - startCount;
+            if (added <= 0)
+                return;
+            if (!eraseActive[penIndex])
+            {
+                if (!Networking.IsOwner(pen.gameObject) && !pen._TakeOwnership())
+                {
+                    RemoveEraseEntries(penIndex);
+                    return;
+                }
+                eraseActive[penIndex] = true;
+            }
+            Log(GrabQvStrings.EraseStartedLog + objectId + GrabQvStrings.EraseInkCountLog + added +
+                GrabQvStrings.EraseOtherCountLog + otherCount);
+        }
+
+        public bool CanUndoAfterSplitErase(QvPen_PenManager pen)
+        {
+            int penIndex = FindTargetPen(pen);
+            if (penIndex < 0)
+                return true;
+            return !eraseActive[penIndex] && (!eraseHasAccepted[penIndex] ||
+                Time.time - eraseLastAcceptedTimes[penIndex] >= EraseSyncSafetyDelay);
+        }
+
+        public bool CanRunSelfAfterSplitErase(QvPen_PenManager pen)
+        {
+            int penIndex = FindTargetPen(pen);
+            if (penIndex < 0)
+                return true;
+            if (eraseActive[penIndex])
+            {
+                int entry = FindFirstEraseEntry(penIndex);
+                if (entry >= 0 && eraseWasSent[entry] && !Utilities.IsValid(eraseLines[entry]))
+                    return eraseOwnedByLocal[entry];
+                return eraseHasAccepted[penIndex] && eraseLastAcceptedWasLocal[penIndex];
+            }
+            return !eraseHasAccepted[penIndex] || eraseLastAcceptedWasLocal[penIndex] ||
+                Time.time - eraseLastAcceptedTimes[penIndex] >= EraseSyncSafetyDelay;
+        }
+
+        public void StopSplitEraseForSelf(QvPen_PenManager pen)
+        {
+            StopSplitErase(FindTargetPen(pen), GrabQvStrings.EraseStoppedSelf);
+        }
+
+        public void StopSplitEraseForAll(QvPen_PenManager pen)
+        {
+            StopSplitErase(FindTargetPen(pen), GrabQvStrings.EraseStoppedAll);
+        }
+
+        private void FindNewestLocalInk(Transform pool, int penIndex, int localPlayerId, ref int newestInkId,
+            ref LineRenderer newestLine, ref Vector3 newestPenIdVector, ref Vector3 newestInkIdVector)
+        {
+            if (!Utilities.IsValid(pool))
+                return;
+            for (int i = 0; i < pool.childCount; i++)
+            {
+                Transform child = pool.GetChild(i);
+                Vector3 penIdVector;
+                Vector3 inkIdVector;
+                Vector3 ownerIdVector;
+                if (!Utilities.IsValid(child) || !QvPenUtilities.TryGetIdFromInk(child.gameObject,
+                    out penIdVector, out inkIdVector, out ownerIdVector) ||
+                    QvPenUtilities.EulerAnglesToPlayerId(ownerIdVector) != localPlayerId)
+                    continue;
+                int inkId = QvPenUtilities.Vector3ToInt32(inkIdVector);
+                LineRenderer line = child.GetComponent<LineRenderer>();
+                if (inkId <= newestInkId || !Utilities.IsValid(line) || IsQueuedForErase(penIndex, line))
+                    continue;
+                newestInkId = inkId;
+                newestLine = line;
+                newestPenIdVector = penIdVector;
+                newestInkIdVector = inkIdVector;
+            }
+        }
+
+        private bool AppendErase(int penIndex, LineRenderer line, bool ownedByLocal)
+        {
+            if (eraseCount >= MaxBindings || !Utilities.IsValid(line))
+                return false;
+            Vector3 penIdVector;
+            Vector3 inkIdVector;
+            Vector3 ownerIdVector;
+            if (!QvPenUtilities.TryGetIdFromInk(line.gameObject, out penIdVector, out inkIdVector,
+                out ownerIdVector))
+                return false;
+            erasePenIndexes[eraseCount] = penIndex;
+            erasePenIdVectors[eraseCount] = penIdVector;
+            eraseInkIdVectors[eraseCount] = inkIdVector;
+            eraseLines[eraseCount] = line;
+            eraseOwnedByLocal[eraseCount] = ownedByLocal;
+            eraseWasSent[eraseCount] = false;
+            eraseSendStartedTimes[eraseCount] = 0f;
+            eraseCount++;
+            return true;
+        }
+
+        private bool IsLineOwnedBy(LineRenderer line, int playerId)
+        {
+            Vector3 penIdVector;
+            Vector3 inkIdVector;
+            Vector3 ownerIdVector;
+            return Utilities.IsValid(line) && QvPenUtilities.TryGetIdFromInk(line.gameObject,
+                out penIdVector, out inkIdVector, out ownerIdVector) &&
+                QvPenUtilities.EulerAnglesToPlayerId(ownerIdVector) == playerId;
+        }
+
+        private bool IsQueuedForErase(int penIndex, LineRenderer line)
+        {
+            for (int i = 0; i < eraseCount; i++)
+                if (erasePenIndexes[i] == penIndex && eraseLines[i] == line) return true;
+            return false;
+        }
+
+        private void ProcessSplitErases()
+        {
+            if (eraseCount == 0)
+                return;
+            for (int penIndex = 0; penIndex < eraseActive.Length; penIndex++)
+            {
+                if (!eraseActive[penIndex])
+                    continue;
+                if (Utilities.IsValid(targetPickups[penIndex]) && targetPickups[penIndex].IsHeld)
+                {
+                    StopSplitErase(penIndex, GrabQvStrings.EraseStoppedHeld);
+                    continue;
+                }
+                QvPen_PenManager pen = targetedPens[penIndex];
+                if (!Utilities.IsValid(pen) || !Networking.IsOwner(pen.gameObject))
+                {
+                    StopSplitErase(penIndex, GrabQvStrings.EraseStoppedOwner);
+                    continue;
+                }
+                int entry = FindFirstEraseEntry(penIndex);
+                if (entry < 0)
+                {
+                    eraseActive[penIndex] = false;
+                    continue;
+                }
+                LineRenderer line = eraseLines[entry];
+                if (!Utilities.IsValid(line))
+                {
+                    if (eraseWasSent[entry])
+                    {
+                        eraseHasAccepted[penIndex] = true;
+                        eraseLastAcceptedWasLocal[penIndex] = eraseOwnedByLocal[entry];
+                        eraseLastAcceptedTimes[penIndex] = Time.time;
+                    }
+                    RemoveEraseAt(entry);
+                    if (FindFirstEraseEntry(penIndex) < 0)
+                        eraseActive[penIndex] = false;
+                    continue;
+                }
+                if (eraseWasSent[entry] && Time.time - eraseSendStartedTimes[entry] >= EraseSendTimeout)
+                {
+                    StopSplitErase(penIndex, GrabQvStrings.EraseStoppedTimeout);
+                    continue;
+                }
+                if (!eraseWasSent[entry])
+                {
+                    eraseWasSent[entry] = true;
+                    eraseSendStartedTimes[entry] = Time.time;
+                }
+                int length = QvPen_Pen.FOOTER_ELEMENT_ERASE_LENGTH;
+                Vector3[] data = new Vector3[length];
+                VRCPlayerApi localPlayer = Networking.LocalPlayer;
+                if (!Utilities.IsValid(localPlayer))
+                    continue;
+                data[length - 1 - QvPen_Pen.FOOTER_ELEMENT_DATA_INFO] =
+                    new Vector3(localPlayer.playerId, (int)QvPen_Pen_Mode.Erase, length);
+                data[length - 1 - QvPen_Pen.FOOTER_ELEMENT_PEN_ID] = erasePenIdVectors[entry];
+                data[length - 1 - QvPen_Pen.FOOTER_ELEMENT_INK_ID] = eraseInkIdVectors[entry];
+                pen._SendData(data);
+            }
+        }
+
+        private int FindFirstEraseEntry(int penIndex)
+        {
+            for (int i = 0; i < eraseCount; i++)
+                if (erasePenIndexes[i] == penIndex) return i;
+            return -1;
+        }
+
+        private void StopSplitErase(int penIndex, string reason)
+        {
+            if (penIndex < 0 || penIndex >= eraseActive.Length)
+                return;
+            bool wasActive = eraseActive[penIndex];
+            RemoveEraseEntries(penIndex);
+            eraseActive[penIndex] = false;
+            if (wasActive)
+                Log(GrabQvStrings.EraseStoppedLog + reason);
+        }
+
+        private void RemoveEraseEntries(int penIndex)
+        {
+            for (int i = eraseCount - 1; i >= 0; i--)
+                if (erasePenIndexes[i] == penIndex) RemoveEraseAt(i);
+        }
+
+        private void RemoveEraseAt(int index)
+        {
+            for (int i = index; i < eraseCount - 1; i++)
+            {
+                erasePenIndexes[i] = erasePenIndexes[i + 1];
+                erasePenIdVectors[i] = erasePenIdVectors[i + 1];
+                eraseInkIdVectors[i] = eraseInkIdVectors[i + 1];
+                eraseLines[i] = eraseLines[i + 1];
+                eraseOwnedByLocal[i] = eraseOwnedByLocal[i + 1];
+                eraseWasSent[i] = eraseWasSent[i + 1];
+                eraseSendStartedTimes[i] = eraseSendStartedTimes[i + 1];
+            }
+            eraseCount--;
+            eraseLines[eraseCount] = null;
         }
 
         [NetworkCallable(maxEventsPerSecond: 20)]
@@ -1894,6 +2182,7 @@ namespace Maaaaa.EXQv
                 autoSplitDistance = 0f;
             ResolveTargetReferences();
             RefreshBodyQvManagerReference();
+            RefreshHandleAutoHold();
         }
 
         public bool RefreshTargetReferences()
@@ -1917,6 +2206,24 @@ namespace Maaaaa.EXQv
             }
             bodyQvManager = count == 1 ? found : null;
             return count;
+        }
+
+        public bool RefreshHandleAutoHold()
+        {
+            bool changed = false;
+            VRC_Pickup.AutoHoldMode expected = toggleGrab
+                ? VRC_Pickup.AutoHoldMode.Yes
+                : VRC_Pickup.AutoHoldMode.No;
+            for (int i = 0; handlePickups != null && i < handlePickups.Length; i++)
+            {
+                VRC_Pickup pickup = handlePickups[i];
+                if (pickup == null || pickup.AutoHold == expected)
+                    continue;
+                pickup.AutoHold = expected;
+                UnityEditor.EditorUtility.SetDirty(pickup);
+                changed = true;
+            }
+            return changed;
         }
 
         private bool SharesTargetPen(BodyQvManager manager)

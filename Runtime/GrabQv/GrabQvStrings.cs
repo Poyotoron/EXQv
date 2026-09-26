@@ -7,6 +7,8 @@ namespace Maaaaa.EXQv
         public const string AutoSplitDistanceLabel = "自動で区切る距離（m）";
         public const string AutoSplitDistanceTooltip = "線の全点が現在の持ち手からこの距離以上離れていると、新しいまとまりにします。0 で無効です。";
         public const string LogResultsLabel = "結果をログに出す（確認用）";
+        public const string ToggleGrabLabel = "押すたびに持つ／離す";
+        public const string ToggleGrabTooltip = "ON: 押すと持ち、もう一度押すと離します（ペンと同じ持ち方）。OFF: 押している間だけ持ちます。";
         public const string PickupText = "持つ";
         public const string CreatedLog = "[GrabQv] オブジェクトを作成: ";
         public const string AssignedLog = "[GrabQv] 持ち手を割り当て: ";
@@ -34,6 +36,24 @@ namespace Maaaaa.EXQv
         public const string CreateSplitButtons = "区切りボタンを作る";
         public const string ExtraSplitButtons = "対象から外したペンの区切りボタンが残っています。";
         public const string RemoveExtraSplitButtons = "不要な区切りボタンを消す";
+        public const string MissingEraseButtons = "Erase ボタンがまだ差し替えられていない対象ペンがあります。";
+        public const string ReplaceEraseButtons = "Erase ボタンを差し替える";
+        public const string ExtraEraseButtons = "対象外・管理不明・重複している差し替え済み Erase ボタンがあります。";
+        public const string RestoreEraseButtons = "不要・重複した Erase ボタンを元に戻す";
+        public const string MissingEraseReferences = "QvPen の Erase ボタンの表示参照を取得できません。QvPen の構成を確認してください。";
+        public const string EraseSplitUiName = "EraseUI (Split)";
+        public const string EraseSplitIndicatorName = "Indicator (Split)";
+        public const string EraseSplitTextName = "Text (Split)";
+        public const string EraseSplitText = "SPLIT";
+        public const string EraseStartedLog = "[GrabQv] まとまりを消去: まとまり ";
+        public const string EraseInkCountLog = " / 線 ";
+        public const string EraseOtherCountLog = " / 他人の線 ";
+        public const string EraseStoppedLog = "[GrabQv] まとまりの消去を中止: ";
+        public const string EraseStoppedHeld = "ペンを持ったため";
+        public const string EraseStoppedOwner = "ペンのオーナーが替わったため";
+        public const string EraseStoppedTimeout = "線の消去が 10 秒以内に受け付けられなかったため";
+        public const string EraseStoppedSelf = "Self を実行するため";
+        public const string EraseStoppedAll = "All を実行するため";
         public const string QvPenVersion = "対応確認済みの QvPen は 3.3.15 です。現在: {0}";
     }
 }
