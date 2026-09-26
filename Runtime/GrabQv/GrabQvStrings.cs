@@ -22,7 +22,14 @@ namespace Maaaaa.EXQv
         public const string MissingPens = "対象ペンが設定されていません。";
         public const string NullPen = "対象ペンに null が含まれています。";
         public const string MissingLateSync = "対象ペンの LateSync が見つかりません。QvPen の構成を確認してください。";
-        public const string BodyQvOverlap = "BodyQv と GrabQv の両方に指定されたペンがあります。線の追従が競合するため、片方から外してください。";
+        public const string BodyQvCombined = "次のペンは BodyQv の対象でもあるため、組み合わせて動きます（体に追従し、持って位置を直せます）。";
+        public const string MultipleBodyQvManagers = "対象ペンを共有する BodyQvManager が複数あります。組み合わせ先を決められないため、BodyQvManager への参照を設定できません。";
+        public const string DrawnReason = "描いた";
+        public const string DroppedReason = "離した";
+        public const string HeldLog = "[GrabQv] 持ちました: まとまり ";
+        public const string DroppedLog = "[GrabQv] 離しました: まとまり ";
+        public const string PlayerLeftLog = "[GrabQv] プレイヤー退出のため最後の位置に固定: まとまり ";
+        public const string BindingResultPrefix = "[GrabQv] まとまり ";
         public const string MissingSplitButtons = "区切りボタンが無い対象ペンがあります。";
         public const string CreateSplitButtons = "区切りボタンを作る";
         public const string ExtraSplitButtons = "対象から外したペンの区切りボタンが残っています。";

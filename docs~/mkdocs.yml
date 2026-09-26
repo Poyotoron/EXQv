@@ -60,6 +60,7 @@ nav:
       - レイヤーの設定: layers.md
   - GrabQv:
       - 描いたものを持つ: grabqv.md
+  - BodyQv + GrabQv: bodygrabqv.md
   - 設定の一覧: setup.md
   - できないこと・制限: limitations.md
   - 困ったときは: troubleshooting.md

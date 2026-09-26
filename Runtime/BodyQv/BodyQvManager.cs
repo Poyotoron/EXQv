@@ -20,7 +20,8 @@ namespace Maaaaa.EXQv
 
         private const int MaxKnownInks = 2048;
         private const int MaxPendingBindings = 32;
-        private const int MaxStrokeSamples = 16;
+        public const int MaxStrokeSamples = 16;
+        public const int MaxRootCandidates = 64;
         private const int MaxPlayers = 80;
         private const int MaxColliderPlayers = 16;
         private const int CollidersPerPlayer = 22;
@@ -39,8 +40,8 @@ namespace Maaaaa.EXQv
         private const float HeadStartNeckMinimumHeight = -0.05f;
         private const float HeadStartFallbackMinimumHeight = -0.19f;
         private const int HeadAccessoryRequiredPercent = 80;
-        private const int LeftHandMask = 1;
-        private const int RightHandMask = 2;
+        public const int LeftHandMask = 1;
+        public const int RightHandMask = 2;
 
         [Header("対象ペン")]
         [SerializeField, Tooltip("体への追従と表面吸着を有効にする QvPen の PenManager です。")]
@@ -147,6 +148,7 @@ namespace Maaaaa.EXQv
         private int[] poolChildCounts = new int[0];
         private Transform[] poolLastChildren = new Transform[0];
         private int[] lastHeldHandMasks = new int[0];
+        private bool[] combinedPens = new bool[0];
         private int currentHeldHandMask;
         private float nextFullPoolScanTime;
         private VRCPlayerApi[] players = new VRCPlayerApi[MaxPlayers];
@@ -166,6 +168,7 @@ namespace Maaaaa.EXQv
         private int[] pendingExcludedHandMasks = new int[MaxPendingBindings];
         private int pendingBindingCount;
         private Vector3[] strokeSamplePoints = new Vector3[MaxStrokeSamples];
+        private Vector3[] strokeRootPoints = new Vector3[2];
         private int lastNearestPlayerId = -1;
         private int lastNearestType = -1;
         private float lastNearestDistance = float.MaxValue;
@@ -192,6 +195,9 @@ namespace Maaaaa.EXQv
         public int BodyColliderLayer => bodyColliderLayer;
         public GameObject BodyColliderTemplate => bodyColliderTemplate;
         public Transform BodyColliderPoolRoot => bodyColliderPoolRoot;
+        public int LastNearestPlayerId => lastNearestPlayerId;
+        public int LastNearestType => lastNearestType;
+        public float LastNearestDistance => lastNearestDistance;
 
         private void Start()
         {
@@ -272,6 +278,8 @@ namespace Maaaaa.EXQv
 
             for (int i = 0; i < targetLateSyncs.Length; i++)
             {
+                if (i < combinedPens.Length && combinedPens[i])
+                    continue;
                 QvPen_LateSync lateSync = targetLateSyncs[i];
                 if (!Utilities.IsValid(lateSync))
                     continue;
@@ -398,7 +406,10 @@ namespace Maaaaa.EXQv
             string method;
             Vector3 bindingPosition;
             Quaternion bindingRotation;
-            if (!TryDetermineBinding(strokeSamplePoints, sampleCount, excludedHandMask,
+            strokeRootPoints[0] = strokeSamplePoints[0];
+            strokeRootPoints[1] = strokeSamplePoints[sampleCount - 1];
+            if (!TryDetermineBinding(strokeSamplePoints, sampleCount, strokeRootPoints, 2, 2, true,
+                    excludedHandMask,
                     out playerId, out bindingType, out surfaceDistance, out method,
                     out bindingPosition, out bindingRotation))
             {
@@ -413,7 +424,30 @@ namespace Maaaaa.EXQv
                 penId, inkId, playerId, bindingType, bindingPosition, bindingRotation);
         }
 
+        // 点は描き始めから並べる（0 番目が描き始め）。
         public bool TryDetermineBinding(Vector3[] samplePoints, int sampleCount, int excludedHandMask,
+            out int playerId, out int bindingType, out float surfaceDistance, out string method,
+            out Vector3 bindingPosition, out Quaternion bindingRotation)
+        {
+            return TryDetermineBinding(samplePoints, sampleCount, null, 0, excludedHandMask,
+                out playerId, out bindingType, out surfaceDistance, out method,
+                out bindingPosition, out bindingRotation);
+        }
+
+        // 付け根の候補の点は、組み合わせのまとまりを置き直したときは複数の線の端を含む。
+        public bool TryDetermineBinding(Vector3[] samplePoints, int sampleCount,
+            Vector3[] rootCandidatePoints, int rootCandidateCount, int excludedHandMask,
+            out int playerId, out int bindingType, out float surfaceDistance, out string method,
+            out Vector3 bindingPosition, out Quaternion bindingRotation)
+        {
+            return TryDetermineBinding(samplePoints, sampleCount, rootCandidatePoints, rootCandidateCount,
+                0, false, excludedHandMask, out playerId, out bindingType, out surfaceDistance, out method,
+                out bindingPosition, out bindingRotation);
+        }
+
+        public bool TryDetermineBinding(Vector3[] samplePoints, int sampleCount,
+            Vector3[] rootCandidatePoints, int rootCandidateCount, int rootEndpointCount,
+            bool singleStrokeRootCandidates, int excludedHandMask,
             out int playerId, out int bindingType, out float surfaceDistance, out string method,
             out Vector3 bindingPosition, out Quaternion bindingRotation)
         {
@@ -488,23 +522,100 @@ namespace Maaaaa.EXQv
                 return true;
             }
 
-            bool hasBody = FindBestBodySurface(samplePoints, sampleCount, sampleCenter, excludedHandMask,
+            bool hasBody = FindBestBodySurface(samplePoints, sampleCount, sampleCenter, excludedHandMask, true,
                 out playerId, out bindingType, out surfaceDistance, out bindingPosition, out bindingRotation);
             lastNearestPlayerId = playerId;
             lastNearestType = bindingType;
             lastNearestDistance = surfaceDistance;
-            if (!hasBody || surfaceDistance > surfaceBindingDistance)
+            if (hasBody && surfaceDistance <= surfaceBindingDistance)
             {
-                playerId = -1;
-                bindingType = -1;
-                method = "";
-                bindingPosition = Vector3.zero;
-                bindingRotation = Quaternion.identity;
-                return false;
+                method = "表面";
+                return true;
             }
 
-            method = "表面";
-            return true;
+            int rootPlayerId;
+            int rootType;
+            float rootDistance;
+            Vector3 rootPosition;
+            Quaternion rootRotation;
+            int rootPointIndex;
+            bool hasRoot = FindBestRootSurface(rootCandidatePoints, rootCandidateCount, excludedHandMask,
+                out rootPlayerId, out rootType, out rootDistance, out rootPosition, out rootRotation,
+                out rootPointIndex);
+            if (hasRoot && ShouldReplaceCandidate(rootDistance, rootPlayerId, rootType,
+                    lastNearestDistance, lastNearestPlayerId, lastNearestType))
+            {
+                lastNearestPlayerId = rootPlayerId;
+                lastNearestType = rootType;
+                lastNearestDistance = rootDistance;
+            }
+            if (hasRoot && rootDistance <= surfaceBindingDistance)
+            {
+                playerId = rootPlayerId;
+                bindingType = rootType;
+                surfaceDistance = rootDistance;
+                bindingPosition = rootPosition;
+                bindingRotation = rootRotation;
+                string pointName = "線の途中";
+                if (singleStrokeRootCandidates)
+                {
+                    if (rootPointIndex == 0)
+                        pointName = "描き始め";
+                    else if (rootPointIndex == rootCandidateCount - 1)
+                        pointName = "描き終わり";
+                }
+                else if (rootPointIndex >= 0 && rootPointIndex < rootEndpointCount)
+                    pointName = "線の端";
+                method = "付け根（" + pointName + "）";
+                return true;
+            }
+
+            playerId = -1;
+            bindingType = -1;
+            method = "";
+            bindingPosition = Vector3.zero;
+            bindingRotation = Quaternion.identity;
+            return false;
+        }
+
+        private bool FindBestRootSurface(Vector3[] rootCandidatePoints, int rootCandidateCount,
+            int excludedHandMask, out int bestPlayerId, out int bestType, out float bestDistance,
+            out Vector3 bestPosition, out Quaternion bestRotation, out int bestPointIndex)
+        {
+            bestPlayerId = -1;
+            bestType = -1;
+            bestDistance = float.MaxValue;
+            bestPosition = Vector3.zero;
+            bestRotation = Quaternion.identity;
+            bestPointIndex = -1;
+            if (rootCandidatePoints == null || rootCandidateCount <= 0)
+                return false;
+
+            rootCandidateCount = Mathf.Min(rootCandidateCount,
+                Mathf.Min(rootCandidatePoints.Length, MaxRootCandidates));
+            Vector3[] onePoint = new Vector3[1];
+            for (int i = 0; i < rootCandidateCount; i++)
+            {
+                onePoint[0] = rootCandidatePoints[i];
+                int playerId;
+                int bindingType;
+                float distance;
+                Vector3 position;
+                Quaternion rotation;
+                if (!FindBestBodySurface(onePoint, 1, rootCandidatePoints[i], excludedHandMask, false,
+                        out playerId, out bindingType, out distance, out position, out rotation) ||
+                    !ShouldReplaceCandidate(distance, playerId, bindingType,
+                        bestDistance, bestPlayerId, bestType))
+                    continue;
+
+                bestPlayerId = playerId;
+                bestType = bindingType;
+                bestDistance = distance;
+                bestPosition = position;
+                bestRotation = rotation;
+                bestPointIndex = i;
+            }
+            return bestPlayerId > 0;
         }
 
         private bool FindBestArmSurface(Vector3[] samplePoints, int sampleCount, Vector3 sampleCenter,
@@ -742,7 +853,8 @@ namespace Maaaaa.EXQv
         }
 
         private bool FindBestBodySurface(Vector3[] samplePoints, int sampleCount, Vector3 sampleCenter,
-            int excludedHandMask, out int bestPlayerId, out int bestType, out float bestDistance,
+            int excludedHandMask, bool includePlayerOrigin,
+            out int bestPlayerId, out int bestType, out float bestDistance,
             out Vector3 bestPosition, out Quaternion bestRotation)
         {
             bestPlayerId = -1;
@@ -798,17 +910,20 @@ namespace Maaaaa.EXQv
                     player.isLocal && (excludedHandMask & RightHandMask) != 0,
                     ref bestDistance, ref bestPlayerId, ref bestType, ref bestPosition, ref bestRotation);
 
-                Vector3 originPosition = player.GetPosition();
-                float originDistance = GetAverageSurfaceDistance(samplePoints, sampleCount,
-                    originPosition, originPosition, 0f);
-                if (ShouldReplaceCandidate(originDistance, player.playerId, PlayerOrigin,
-                        bestDistance, bestPlayerId, bestType))
+                if (includePlayerOrigin)
                 {
-                    bestDistance = originDistance;
-                    bestPlayerId = player.playerId;
-                    bestType = PlayerOrigin;
-                    bestPosition = originPosition;
-                    bestRotation = player.GetRotation();
+                    Vector3 originPosition = player.GetPosition();
+                    float originDistance = GetAverageSurfaceDistance(samplePoints, sampleCount,
+                        originPosition, originPosition, 0f);
+                    if (ShouldReplaceCandidate(originDistance, player.playerId, PlayerOrigin,
+                            bestDistance, bestPlayerId, bestType))
+                    {
+                        bestDistance = originDistance;
+                        bestPlayerId = player.playerId;
+                        bestType = PlayerOrigin;
+                        bestPosition = originPosition;
+                        bestRotation = player.GetRotation();
+                    }
                 }
             }
             return bestPlayerId > 0;
@@ -1013,7 +1128,7 @@ namespace Maaaaa.EXQv
             return Mathf.Round(meters * 10000f) / 100f;
         }
 
-        private string GetBindingTypeName(int bindingType)
+        public string GetBindingTypeName(int bindingType)
         {
             if (bindingType == TrackingHead)
                 return "頭のトラッキング点";
@@ -1613,18 +1728,34 @@ namespace Maaaaa.EXQv
             return false;
         }
 
-        private bool IsValidBindingData(int playerId, int bindingType, Vector3 position, Quaternion rotation)
+        public bool TryGetBindingPose(int playerId, int bindingType,
+            out Vector3 position, out Quaternion rotation)
+        {
+            VRCPlayerApi player = VRCPlayerApi.GetPlayerById(playerId);
+            if (!Utilities.IsValid(player))
+            {
+                position = Vector3.zero;
+                rotation = Quaternion.identity;
+                return false;
+            }
+            return TryGetPose(player, bindingType, out position, out rotation);
+        }
+
+        public bool IsValidBindingTarget(int playerId, int bindingType)
         {
             if (playerId <= 0 || playerId > 65535)
                 return false;
+            return (bindingType >= 0 && bindingType < (int)HumanBodyBones.LastBone &&
+                    bindingType != (int)HumanBodyBones.LeftEye &&
+                    bindingType != (int)HumanBodyBones.RightEye &&
+                    bindingType != (int)HumanBodyBones.Jaw) ||
+                   bindingType == TrackingHead || bindingType == TrackingLeftHand ||
+                   bindingType == TrackingRightHand || bindingType == PlayerOrigin;
+        }
 
-            bool validType = (bindingType >= 0 && bindingType < (int)HumanBodyBones.LastBone &&
-                              bindingType != (int)HumanBodyBones.LeftEye &&
-                              bindingType != (int)HumanBodyBones.RightEye &&
-                              bindingType != (int)HumanBodyBones.Jaw) ||
-                             bindingType == TrackingHead || bindingType == TrackingLeftHand ||
-                             bindingType == TrackingRightHand || bindingType == PlayerOrigin;
-            if (!validType)
+        private bool IsValidBindingData(int playerId, int bindingType, Vector3 position, Quaternion rotation)
+        {
+            if (!IsValidBindingTarget(playerId, bindingType))
                 return false;
 
             if (!IsFinite(position.x) || !IsFinite(position.y) || !IsFinite(position.z) ||
@@ -2081,6 +2212,12 @@ namespace Maaaaa.EXQv
             }
         }
 
+        public int GetDrawingHandMask(QvPen_PenManager pen)
+        {
+            int penIndex = FindTargetPen(pen);
+            return penIndex < 0 ? 0 : GetDrawingHandMask(penIndex);
+        }
+
         private int GetDrawingHandMask(int penIndex)
         {
             int penHandMask = 0;
@@ -2105,6 +2242,39 @@ namespace Maaaaa.EXQv
             return currentHeldHandMask | penHandMask;
         }
 
+        public void RegisterCombinedPen(QvPen_PenManager pen)
+        {
+            int penIndex = FindTargetPen(pen);
+            if (penIndex < 0)
+                return;
+            EnsureCombinedPens();
+            combinedPens[penIndex] = true;
+        }
+
+        private int FindTargetPen(QvPen_PenManager pen)
+        {
+            if (!Utilities.IsValid(pen))
+                return -1;
+            for (int i = 0; i < targetedPens.Length; i++)
+            {
+                if (targetedPens[i] == pen)
+                    return i;
+            }
+            return -1;
+        }
+
+        private void EnsureCombinedPens()
+        {
+            int length = targetedPens == null ? 0 : targetedPens.Length;
+            if (combinedPens != null && combinedPens.Length == length)
+                return;
+            bool[] previous = combinedPens;
+            combinedPens = new bool[length];
+            int copyLength = previous == null ? 0 : Mathf.Min(previous.Length, length);
+            for (int i = 0; i < copyLength; i++)
+                combinedPens[i] = previous[i];
+        }
+
         private void DisableActiveBodyColliders()
         {
             for (int i = 0; i < activeBodyColliderCount; i++)
@@ -2124,6 +2294,7 @@ namespace Maaaaa.EXQv
         private void ResolveTargetReferences()
         {
             int length = targetedPens == null ? 0 : targetedPens.Length;
+            EnsureCombinedPens();
             if (targetLateSyncs == null || targetLateSyncs.Length != length)
                 targetLateSyncs = new QvPen_LateSync[length];
             if (targetPickups == null || targetPickups.Length != length)
