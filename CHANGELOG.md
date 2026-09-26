@@ -2,6 +2,19 @@
 
 このプロジェクトの変更履歴。バージョニングは [Semantic Versioning](https://semver.org/lang/ja/) に従う。
 
+## [0.4.0] - 2026-09-26
+
+GrabQv のまとまりを Erase ボタンで丸ごと消せるようにし、持ち方を選べるようにした。
+
+### Added
+- **GrabQv**: ペンの Erase ボタンの長押しに、まとまりを丸ごと消す段階を追加した。0.31 秒未満で離すと Undo、0.31 秒で自分が最後に描いたまとまり（ほかの人が描き足した線を含む）、1 秒で自分の線すべて、2 秒でそのペンの線すべてが消える。
+  - ボタンの左上に、SELF・ALL の輪に加えて SPLIT の輪を表示する。
+  - GrabQv の対象のペン（BodyQv + GrabQv のペンを含む）の Erase ボタンだけを差し替える。差し替え・元に戻すは `GrabQvManager` の Inspector のボタンで行う。`GrabQv` / `BodyGrabQv` の Prefab は差し替え済み。
+- **GrabQv**: `GrabQvManager` に「押すたびに持つ／離す」を追加した。ON で押すと持ち、もう一度押すと離す。OFF で押している間だけ持つ。
+
+### Changed
+- **GrabQv**: `GrabQv` の Prefab の持ち方を、押すたびに持つ／離すにした。`BodyGrabQv` の Prefab は、これまでどおり押している間だけ持つ。
+
 ## [0.3.0] - 2026-09-26
 
 BodyQv と GrabQv を 1 本のペンに組み合わせられるようにした。

@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using System.Reflection;
 using Maaaaa.EXQv;
 using QvPen.UdonScript;
+using QvPen.Udon.UI;
 using UnityEditor;
 using UnityEngine;
 using UnityEngine.Animations;
@@ -31,6 +32,8 @@ namespace Maaaaa.EXQv.Editor
 
             GrabQvManager manager = (GrabQvManager)target;
             changed |= manager.RefreshTargetReferences();
+            changed |= manager.RefreshHandleAutoHold();
+            changed |= GrabQvEraseButtonEditorUtility.RefreshExistingButtons(manager);
             if (changed)
                 GrabQvButtonEditorUtility.CopyProxyToUdon(manager);
             int bodyManagerCount = GrabQvBodyLinkEditorUtility.Refresh(manager);
@@ -93,6 +96,8 @@ namespace Maaaaa.EXQv.Editor
         {
             bool missing = GrabQvButtonEditorUtility.HasMissingButtons(manager);
             bool extra = GrabQvButtonEditorUtility.HasExtraButtons(manager);
+            bool missingErase = GrabQvEraseButtonEditorUtility.HasMissingButtons(manager);
+            bool extraErase = GrabQvEraseButtonEditorUtility.HasExtraButtons(manager);
             if (missing)
             {
                 EditorGUILayout.HelpBox(GrabQvStrings.MissingSplitButtons, MessageType.Warning);
@@ -105,6 +110,18 @@ namespace Maaaaa.EXQv.Editor
                 if (GUILayout.Button(GrabQvStrings.RemoveExtraSplitButtons))
                     GrabQvButtonEditorUtility.RemoveExtraButtons(manager);
             }
+            if (missingErase)
+            {
+                EditorGUILayout.HelpBox(GrabQvStrings.MissingEraseButtons, MessageType.Warning);
+                if (GUILayout.Button(GrabQvStrings.ReplaceEraseButtons))
+                    GrabQvEraseButtonEditorUtility.CreateMissingButtons(manager);
+            }
+            if (extraErase)
+            {
+                EditorGUILayout.HelpBox(GrabQvStrings.ExtraEraseButtons, MessageType.Warning);
+                if (GUILayout.Button(GrabQvStrings.RestoreEraseButtons))
+                    GrabQvEraseButtonEditorUtility.RemoveExtraButtons(manager);
+            }
         }
 
         private static void DrawQvPenVersionWarning()
@@ -113,6 +130,322 @@ namespace Maaaaa.EXQv.Editor
             string version = package == null ? "不明" : package.version;
             if (version != "3.3.15")
                 EditorGUILayout.HelpBox(string.Format(GrabQvStrings.QvPenVersion, version), MessageType.Warning);
+        }
+    }
+
+    internal static class GrabQvEraseButtonEditorUtility
+    {
+        public static bool HasMissingButtons(GrabQvManager manager)
+        {
+            QvPen_PenManager[] pens = manager.TargetedPens;
+            for (int i = 0; pens != null && i < pens.Length; i++)
+            {
+                if (pens[i] == null)
+                    continue;
+                GrabQvEraseButton[] buttons = pens[i].GetComponentsInChildren<GrabQvEraseButton>(true);
+                if (!HasButton(buttons, manager, pens[i]))
+                    return true;
+            }
+            return false;
+        }
+
+        public static bool HasExtraButtons(GrabQvManager manager)
+        {
+            GrabQvEraseButton[] buttons = GetSceneButtons(manager);
+            for (int i = 0; i < buttons.Length; i++)
+            {
+                if (buttons[i].Manager == null)
+                    return true;
+                if (buttons[i].Manager != manager)
+                    continue;
+                if (!Contains(manager.TargetedPens, buttons[i].Pen) || IsDuplicate(buttons, i))
+                    return true;
+            }
+            return false;
+        }
+
+        public static void CreateMissingButtons(GrabQvManager manager)
+        {
+            QvPen_PenManager[] pens = manager.TargetedPens;
+            for (int i = 0; pens != null && i < pens.Length; i++)
+            {
+                GrabQvEraseButton[] buttons = pens[i] == null ? null :
+                    pens[i].GetComponentsInChildren<GrabQvEraseButton>(true);
+                if (pens[i] == null || HasButton(buttons, manager, pens[i]))
+                    continue;
+                ReplaceButton(manager, pens[i]);
+            }
+        }
+
+        public static void RemoveExtraButtons(GrabQvManager manager)
+        {
+            GrabQvEraseButton[] buttons = GetSceneButtons(manager);
+            for (int i = buttons.Length - 1; i >= 0; i--)
+            {
+                if (buttons[i].Manager != null && buttons[i].Manager != manager)
+                    continue;
+                if (buttons[i].Manager == manager && Contains(manager.TargetedPens, buttons[i].Pen) &&
+                    !IsDuplicate(buttons, i))
+                    continue;
+                RestoreButton(buttons[i]);
+            }
+        }
+
+        public static bool RefreshExistingButtons(GrabQvManager manager)
+        {
+            bool changed = false;
+            QvPen_PenManager[] pens = manager.TargetedPens;
+            for (int i = 0; pens != null && i < pens.Length; i++)
+            {
+                if (pens[i] == null)
+                    continue;
+                GrabQvEraseButton[] buttons = pens[i].GetComponentsInChildren<GrabQvEraseButton>(true);
+                for (int j = 0; j < buttons.Length; j++)
+                {
+                    if (buttons[j].Manager != manager)
+                        continue;
+                    Text text = buttons[j].SplitTextObject == null ? null :
+                        buttons[j].SplitTextObject.GetComponent<Text>();
+                    changed |= ConfigureSplitText(text, true);
+                }
+            }
+            return changed;
+        }
+
+        private static void ReplaceButton(GrabQvManager manager, QvPen_PenManager pen)
+        {
+            QvPen_ClearButton original = pen.GetComponentInChildren<QvPen_ClearButton>(true);
+            if (original == null)
+            {
+                Debug.LogWarning(GrabQvStrings.MissingEraseReferences, manager);
+                return;
+            }
+            SerializedObject source = new SerializedObject(original);
+            Image ownIndicator = GetImage(source, "ownIndicator");
+            Image allIndicator = GetImage(source, "allIndicator");
+            Image ownText = GetImage(source, "ownTextImage");
+            Image allText = GetImage(source, "allTextImage");
+            if (ownIndicator == null || allIndicator == null || ownText == null || allText == null)
+            {
+                Debug.LogWarning(GrabQvStrings.MissingEraseReferences, original);
+                return;
+            }
+
+            Undo.RecordObject(original, GrabQvStrings.ReplaceEraseButtons);
+            original.enabled = false;
+            Component originalUdon = GetBackingUdon(original);
+            if (originalUdon != null)
+            {
+                Undo.RecordObject(originalUdon, GrabQvStrings.ReplaceEraseButtons);
+                ((Behaviour)originalUdon).enabled = false;
+            }
+
+            RectTransform ownUi = ownIndicator.transform.parent as RectTransform;
+            RectTransform allUi = allIndicator.transform.parent as RectTransform;
+            if (ownUi == null || allUi == null || ownUi.parent != allUi.parent)
+            {
+                Debug.LogWarning(GrabQvStrings.MissingEraseReferences, original);
+                original.enabled = true;
+                if (originalUdon != null) ((Behaviour)originalUdon).enabled = true;
+                return;
+            }
+            GameObject splitUi = Object.Instantiate(ownUi.gameObject, ownUi.parent);
+            splitUi.name = GrabQvStrings.EraseSplitUiName;
+            Undo.RegisterCreatedObjectUndo(splitUi, GrabQvStrings.ReplaceEraseButtons);
+            RectTransform splitUiRect = (RectTransform)splitUi.transform;
+            splitUiRect.anchoredPosition = ownUi.anchoredPosition +
+                (ownUi.anchoredPosition - allUi.anchoredPosition);
+            Image splitIndicator = splitUi.transform.Find(ownIndicator.name).GetComponent<Image>();
+            splitIndicator.name = GrabQvStrings.EraseSplitIndicatorName;
+            splitIndicator.color = new Color(1f, 0.69f, 0.376f, 1f);
+            splitIndicator.fillAmount = 0f;
+
+            Image[] clonedImages = splitUi.GetComponentsInChildren<Image>(true);
+            for (int i = 0; i < clonedImages.Length; i++)
+            {
+                if (clonedImages[i] != splitIndicator)
+                    Object.DestroyImmediate(clonedImages[i].gameObject);
+            }
+            GameObject textObject = new GameObject(GrabQvStrings.EraseSplitTextName, typeof(RectTransform),
+                typeof(CanvasRenderer), typeof(Text));
+            textObject.transform.SetParent(splitUi.transform, false);
+            Text splitText = textObject.GetComponent<Text>();
+            ConfigureSplitText(splitText, false);
+
+            GrabQvEraseButton replacement = AddEraseComponent(original.gameObject);
+            if (replacement == null)
+            {
+                Undo.DestroyObjectImmediate(splitUi);
+                original.enabled = true;
+                if (originalUdon != null) ((Behaviour)originalUdon).enabled = true;
+                return;
+            }
+            SerializedObject serialized = new SerializedObject(replacement);
+            serialized.FindProperty("manager").objectReferenceValue = manager;
+            serialized.FindProperty("penManager").objectReferenceValue = pen;
+            serialized.FindProperty("splitUi").objectReferenceValue = splitUi;
+            serialized.FindProperty("splitIndicator").objectReferenceValue = splitIndicator;
+            serialized.FindProperty("ownIndicator").objectReferenceValue = ownIndicator;
+            serialized.FindProperty("allIndicator").objectReferenceValue = allIndicator;
+            serialized.FindProperty("splitText").objectReferenceValue = splitText;
+            serialized.FindProperty("ownTextImage").objectReferenceValue = ownText;
+            serialized.FindProperty("allTextImage").objectReferenceValue = allText;
+            serialized.ApplyModifiedPropertiesWithoutUndo();
+            GrabQvButtonEditorUtility.CopyProxyToUdon(replacement);
+
+            Component replacementUdon = GetBackingUdon(replacement);
+            if (originalUdon != null && replacementUdon != null)
+            {
+                Undo.RecordObject(replacementUdon, GrabQvStrings.ReplaceEraseButtons);
+                SerializedObject originalSerialized = new SerializedObject(originalUdon);
+                SerializedObject replacementSerialized = new SerializedObject(replacementUdon);
+                SerializedProperty oldText = originalSerialized.FindProperty("interactText");
+                SerializedProperty newText = replacementSerialized.FindProperty("interactText");
+                SerializedProperty oldProximity = originalSerialized.FindProperty("proximity");
+                SerializedProperty newProximity = replacementSerialized.FindProperty("proximity");
+                if (oldText != null && newText != null) newText.stringValue = oldText.stringValue;
+                if (oldProximity != null && newProximity != null) newProximity.floatValue = oldProximity.floatValue;
+                replacementSerialized.ApplyModifiedPropertiesWithoutUndo();
+            }
+        }
+
+        private static void RestoreButton(GrabQvEraseButton replacement)
+        {
+            GameObject clearObject = replacement.gameObject;
+            GameObject splitUi = replacement.SplitUi;
+            Component replacementUdon = GetBackingUdon(replacement);
+            QvPen_ClearButton original = replacement.GetComponent<QvPen_ClearButton>();
+            if (original != null)
+            {
+                Undo.RecordObject(original, GrabQvStrings.RestoreEraseButtons);
+                original.enabled = true;
+                Component originalUdon = GetBackingUdon(original);
+                if (originalUdon != null)
+                {
+                    Undo.RecordObject(originalUdon, GrabQvStrings.RestoreEraseButtons);
+                    ((Behaviour)originalUdon).enabled = true;
+                }
+            }
+            Undo.DestroyObjectImmediate(replacement);
+            if (replacementUdon != null) Undo.DestroyObjectImmediate(replacementUdon);
+            if (splitUi != null) Undo.DestroyObjectImmediate(splitUi);
+            GrabQvEraseButton[] remaining = clearObject.GetComponents<GrabQvEraseButton>();
+            if (remaining.Length > 0 && original != null)
+            {
+                original.enabled = false;
+                Component originalUdon = GetBackingUdon(original);
+                if (originalUdon != null) ((Behaviour)originalUdon).enabled = false;
+            }
+        }
+
+        private static bool ConfigureSplitText(Text text, bool recordUndo)
+        {
+            if (text == null)
+                return false;
+            RectTransform rect = text.rectTransform;
+            Font font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+            Vector2 topLeft = new Vector2(0f, 1f);
+            Vector2 size = new Vector2(160f, 56f);
+            Vector2 position = new Vector2(5f, -4f);
+            Vector3 scale = new Vector3(0.25f, 0.25f, 1f);
+            bool changed = text.text != GrabQvStrings.EraseSplitText || text.font != font ||
+                text.fontSize != 48 || text.color != Color.white ||
+                text.alignment != TextAnchor.UpperLeft || text.raycastTarget ||
+                text.horizontalOverflow != HorizontalWrapMode.Overflow ||
+                text.verticalOverflow != VerticalWrapMode.Overflow ||
+                rect.anchorMin != topLeft || rect.anchorMax != topLeft || rect.pivot != topLeft ||
+                rect.sizeDelta != size || rect.anchoredPosition != position || rect.localScale != scale;
+            if (!changed)
+                return false;
+            if (recordUndo)
+            {
+                Undo.RecordObject(text, GrabQvStrings.ReplaceEraseButtons);
+                Undo.RecordObject(rect, GrabQvStrings.ReplaceEraseButtons);
+            }
+            text.text = GrabQvStrings.EraseSplitText;
+            text.font = font;
+            text.fontSize = 48;
+            text.color = Color.white;
+            text.alignment = TextAnchor.UpperLeft;
+            text.raycastTarget = false;
+            text.horizontalOverflow = HorizontalWrapMode.Overflow;
+            text.verticalOverflow = VerticalWrapMode.Overflow;
+            rect.anchorMin = topLeft;
+            rect.anchorMax = topLeft;
+            rect.pivot = topLeft;
+            rect.sizeDelta = size;
+            rect.anchoredPosition = position;
+            rect.localScale = scale;
+            EditorUtility.SetDirty(text);
+            EditorUtility.SetDirty(rect);
+            return true;
+        }
+
+        private static Image GetImage(SerializedObject source, string name)
+        {
+            SerializedProperty property = source.FindProperty(name);
+            return property == null ? null : property.objectReferenceValue as Image;
+        }
+
+        private static GrabQvEraseButton AddEraseComponent(GameObject target)
+        {
+            System.Type type = System.Type.GetType("UdonSharpEditor.UdonSharpComponentExtensions, UdonSharp.Editor");
+            MethodInfo method = type == null ? null : type.GetMethod("AddUdonSharpComponent",
+                BindingFlags.Public | BindingFlags.Static, null,
+                new[] { typeof(GameObject), typeof(System.Type) }, null);
+            return method == null ? null : method.Invoke(null,
+                new object[] { target, typeof(GrabQvEraseButton) }) as GrabQvEraseButton;
+        }
+
+        private static Component GetBackingUdon(UdonSharp.UdonSharpBehaviour behaviour)
+        {
+            System.Type type = System.Type.GetType("UdonSharpEditor.UdonSharpEditorUtility, UdonSharp.Editor");
+            MethodInfo method = type == null ? null : type.GetMethod("GetBackingUdonBehaviour",
+                BindingFlags.Public | BindingFlags.Static, null,
+                new[] { typeof(UdonSharp.UdonSharpBehaviour) }, null);
+            return method == null ? null : method.Invoke(null, new object[] { behaviour }) as Component;
+        }
+
+        private static GrabQvEraseButton[] GetSceneButtons(GrabQvManager manager)
+        {
+            List<GrabQvEraseButton> buttons = new List<GrabQvEraseButton>();
+            GameObject[] roots = manager.gameObject.scene.GetRootGameObjects();
+            for (int i = 0; i < roots.Length; i++)
+                buttons.AddRange(roots[i].GetComponentsInChildren<GrabQvEraseButton>(true));
+            return buttons.ToArray();
+        }
+
+        private static bool IsDuplicate(GrabQvEraseButton[] buttons, int index)
+        {
+            GrabQvEraseButton button = buttons[index];
+            if (button == null || button.Manager == null)
+                return false;
+            for (int i = 0; i < buttons.Length; i++)
+            {
+                if (i == index || buttons[i] == null || buttons[i].gameObject != button.gameObject)
+                    continue;
+                if (buttons[i].Manager == null)
+                    continue;
+                if (buttons[i].Manager != button.Manager ||
+                    (i < index && buttons[i].Pen == button.Pen))
+                    return true;
+            }
+            return false;
+        }
+
+        private static bool HasButton(GrabQvEraseButton[] buttons, GrabQvManager manager,
+            QvPen_PenManager pen)
+        {
+            for (int i = 0; buttons != null && i < buttons.Length; i++)
+                if (buttons[i].Manager == manager && buttons[i].Pen == pen) return true;
+            return false;
+        }
+
+        private static bool Contains(QvPen_PenManager[] pens, QvPen_PenManager pen)
+        {
+            for (int i = 0; pens != null && i < pens.Length; i++)
+                if (pens[i] == pen) return true;
+            return false;
         }
     }
 
