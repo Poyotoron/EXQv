@@ -25,6 +25,9 @@ namespace Maaaaa.EXQv
         private const float BindingArrivalGracePeriod = 10f;
         private const float BoundsPadding = 0.03f;
         private const float MinimumBoundsSize = 0.05f;
+        private const float HeldHandleSyncTimeout = 1f;
+        private const float HeldHandleMoveDistance = 0.001f;
+        private const float HeldHandleMoveAngle = 0.1f;
         private const int ObjectSequenceRange = 1000000;
         private const int MaxCombinedStates = 256;
         private const int StateNone = 0;
@@ -64,8 +67,13 @@ namespace Maaaaa.EXQv
         [SerializeField, HideInInspector]
         private VRCObjectSync[] handleSyncs = new VRCObjectSync[0];
 
+        [SerializeField, HideInInspector]
+        private Transform[] handleTargets = new Transform[0];
+
         private Vector3[] handleHomePositions = new Vector3[0];
         private Quaternion[] handleHomeRotations = new Quaternion[0];
+        private Vector3[] handleTargetHomePositions = new Vector3[0];
+        private Quaternion[] handleTargetHomeRotations = new Quaternion[0];
         private int[] handleObjectIds = new int[0];
         private float[] handleAssignedTimes = new float[0];
         private float[] handleEmptySince = new float[0];
@@ -136,6 +144,9 @@ namespace Maaaaa.EXQv
         private Quaternion[] stateLastFrameRotations = new Quaternion[MaxCombinedStates];
         private bool[] stateHasLastFrame = new bool[MaxCombinedStates];
         private float[] stateReceivedTimes = new float[MaxCombinedStates];
+        private Vector3[] stateHeldHandlePositions = new Vector3[MaxCombinedStates];
+        private Quaternion[] stateHeldHandleRotations = new Quaternion[MaxCombinedStates];
+        private bool[] stateWaitingForHandleSync = new bool[MaxCombinedStates];
         private int stateCount;
         private int[] framePosePlayerIds = new int[MaxCombinedStates];
         private int[] framePoseTypes = new int[MaxCombinedStates];
@@ -165,6 +176,10 @@ namespace Maaaaa.EXQv
         public QvPen_LateSync[] TargetLateSyncs => targetLateSyncs;
         public VRC_Pickup[] TargetPickups => targetPickups;
         public GameObject[] HandleObjects => handleObjects;
+        public Transform[] HandleTargets => handleTargets;
+        public VRC_Pickup[] HandlePickups => handlePickups;
+        public BoxCollider[] HandleColliders => handleColliders;
+        public VRCObjectSync[] HandleSyncs => handleSyncs;
         public BodyQvManager BodyQvManager => bodyQvManager;
         public bool[] CombinedPens => combinedPens;
 
@@ -206,11 +221,12 @@ namespace Maaaaa.EXQv
         {
             ProcessPendingInks();
             framePoseCount = 0;
-            ProcessCombinedHandleChanges();
-            if (bindingCount == 0 && stateCount == 0)
+            ProcessHandleChanges();
+            UpdateLocallyHeldHandles();
+            if (bindingCount == 0 && stateCount == 0 && !HasAssignedHandle())
                 return;
 
-            UpdateCombinedFrames();
+            UpdateFramesAndGrabTargets();
 
             int index = 0;
             while (index < bindingCount)
@@ -536,6 +552,8 @@ namespace Maaaaa.EXQv
             handleEmptySince[handleIndex] = -1f;
             handleSawInk[handleIndex] = false;
             MoveHandle(handleIndex, referencePosition, Quaternion.identity);
+            if (Utilities.IsValid(handleTargets[handleIndex]))
+                handleTargets[handleIndex].SetPositionAndRotation(referencePosition, Quaternion.identity);
             SetHandleAvailable(handleIndex, true);
             RemovePendingRequest(objectId);
             RequestSerialization();
@@ -796,6 +814,19 @@ namespace Maaaaa.EXQv
             stateFreshness[index] = freshness;
             stateAuthors[index] = author;
             stateReceivedTimes[index] = Time.time;
+            stateWaitingForHandleSync[index] = false;
+            if (stateKind == StateHeld)
+            {
+                int handleIndex = FindHandleForObject(objectId);
+                if (handleIndex >= 0 && Utilities.IsValid(handleObjects[handleIndex]))
+                {
+                    Transform handle = handleObjects[handleIndex].transform;
+                    stateHeldHandlePositions[index] = handle.position;
+                    stateHeldHandleRotations[index] = handle.rotation;
+                    stateWaitingForHandleSync[index] = true;
+                }
+                StopLocalGrabIfHeldByAnother(handleIndex, playerId);
+            }
             if (Networking.IsOwner(gameObject))
                 RequestSerialization();
             TryApplyBindingsForObject(objectId);
@@ -835,10 +866,14 @@ namespace Maaaaa.EXQv
                 stateLastFrameRotations[i] = stateLastFrameRotations[i + 1];
                 stateHasLastFrame[i] = stateHasLastFrame[i + 1];
                 stateReceivedTimes[i] = stateReceivedTimes[i + 1];
+                stateHeldHandlePositions[i] = stateHeldHandlePositions[i + 1];
+                stateHeldHandleRotations[i] = stateHeldHandleRotations[i + 1];
+                stateWaitingForHandleSync[i] = stateWaitingForHandleSync[i + 1];
             }
             stateCount--;
             stateObjectIds[stateCount] = 0;
             stateHasLastFrame[stateCount] = false;
+            stateWaitingForHandleSync[stateCount] = false;
         }
 
         private bool TryGetObjectFrame(int objectId, out Vector3 position, out Quaternion rotation)
@@ -887,8 +922,29 @@ namespace Maaaaa.EXQv
                 return false;
             }
             Transform handle = handleObjects[handleIndex].transform;
-            position = handle.position + handle.rotation * statePositions[index];
-            rotation = handle.rotation * stateRotations[index];
+            if (IsHandleHeldLocally(handleIndex))
+            {
+                stateWaitingForHandleSync[index] = false;
+                position = handle.position;
+                rotation = handle.rotation;
+                return true;
+            }
+            if (stateWaitingForHandleSync[index])
+            {
+                bool moved = Vector3.Distance(handle.position, stateHeldHandlePositions[index]) >=
+                             HeldHandleMoveDistance ||
+                             Quaternion.Angle(handle.rotation, stateHeldHandleRotations[index]) >=
+                             HeldHandleMoveAngle;
+                if (!moved && Time.time - stateReceivedTimes[index] < HeldHandleSyncTimeout)
+                {
+                    position = statePositions[index];
+                    rotation = stateRotations[index];
+                    return true;
+                }
+                stateWaitingForHandleSync[index] = false;
+            }
+            position = handle.position;
+            rotation = handle.rotation;
             return true;
         }
 
@@ -916,24 +972,36 @@ namespace Maaaaa.EXQv
             return valid;
         }
 
-        private void UpdateCombinedFrames()
+        private void UpdateFramesAndGrabTargets()
         {
-            for (int i = 0; i < stateCount; i++)
+            for (int i = 0; i < handleObjectIds.Length; i++)
             {
+                int objectId = handleObjectIds[i];
+                if (objectId == 0 || !Utilities.IsValid(handleTargets[i]))
+                    continue;
                 Vector3 position;
                 Quaternion rotation;
-                if (!TryGetObjectFrame(stateObjectIds[i], out position, out rotation))
-                    continue;
-                stateLastFramePositions[i] = position;
-                stateLastFrameRotations[i] = rotation;
-                stateHasLastFrame[i] = true;
-                int handleIndex = FindHandleForObject(stateObjectIds[i]);
-                if (handleIndex < 0 || !Utilities.IsValid(handleColliders[handleIndex]))
-                    continue;
-                handleColliders[handleIndex].transform.SetPositionAndRotation(position, rotation);
-                handleLastFramePositions[handleIndex] = position;
-                handleLastFrameRotations[handleIndex] = rotation;
-                handleHasLastFrame[handleIndex] = true;
+                int stateIndex = FindState(objectId);
+                if (stateIndex >= 0)
+                {
+                    if (!TryGetObjectFrame(objectId, out position, out rotation))
+                        continue;
+                    stateLastFramePositions[stateIndex] = position;
+                    stateLastFrameRotations[stateIndex] = rotation;
+                    stateHasLastFrame[stateIndex] = true;
+                }
+                else
+                {
+                    if (!Utilities.IsValid(handleObjects[i]))
+                        continue;
+                    position = handleObjects[i].transform.position;
+                    rotation = handleObjects[i].transform.rotation;
+                }
+                if (!IsHandleHeldLocally(i))
+                    handleTargets[i].SetPositionAndRotation(position, rotation);
+                handleLastFramePositions[i] = position;
+                handleLastFrameRotations[i] = rotation;
+                handleHasLastFrame[i] = true;
             }
         }
 
@@ -942,9 +1010,9 @@ namespace Maaaaa.EXQv
             for (int i = 0; i < handleObjectIds.Length; i++)
             {
                 int objectId = handleObjectIds[i];
-                if (objectId == 0 || FindState(objectId) < 0 || !Utilities.IsValid(handlePickups[i]))
+                if (objectId == 0 || !Utilities.IsValid(handlePickups[i]))
                 {
-                    // 何もすることが無いフレームで Transform に書き込まないよう、残っているものがあるときだけ戻す。
+                    // 何もすることが無いフレームで書き込まないよう、残っているものがあるときだけ戻す。
                     if (handleWasLocallyHeld[i] || handlePickupPending[i] || handleDropPending[i] || handleHasLastFrame[i])
                         ResetHandleState(i);
                     continue;
@@ -952,6 +1020,13 @@ namespace Maaaaa.EXQv
                 VRC_Pickup pickup = handlePickups[i];
                 VRCPlayerApi player = pickup.currentPlayer;
                 bool heldLocally = pickup.IsHeld && Utilities.IsValid(player) && player.isLocal;
+                if (heldLocally && handleWasLocallyHeld[i] && Utilities.IsValid(handleObjects[i]) &&
+                    !Networking.IsOwner(handleObjects[i]))
+                {
+                    pickup.Drop();
+                    ResetHandleState(i);
+                    continue;
+                }
                 if (heldLocally)
                 {
                     if (pickup.currentHand == VRC_Pickup.PickupHand.Left)
@@ -967,7 +1042,7 @@ namespace Maaaaa.EXQv
             }
         }
 
-        private void ProcessCombinedHandleChanges()
+        private void ProcessHandleChanges()
         {
             VRCPlayerApi localPlayer = Networking.LocalPlayer;
             for (int i = 0; i < handleObjectIds.Length; i++)
@@ -987,12 +1062,19 @@ namespace Maaaaa.EXQv
                         frameRotation = stateLastFrameRotations[stateIndex];
                     }
                     else if (!TryGetObjectFrame(objectId, out framePosition, out frameRotation))
-                        continue;
-                    Transform handle = handleObjects[i].transform;
-                    Quaternion inverseHandle = Quaternion.Inverse(handle.rotation);
-                    BroadcastState(objectId, StateHeld,
-                        Utilities.IsValid(localPlayer) ? localPlayer.playerId : 0, -1,
-                        inverseHandle * (framePosition - handle.position), inverseHandle * frameRotation);
+                    {
+                        if (!Utilities.IsValid(handleObjects[i]))
+                            continue;
+                        framePosition = handleObjects[i].transform.position;
+                        frameRotation = handleObjects[i].transform.rotation;
+                    }
+                    if (Utilities.IsValid(localPlayer) && Utilities.IsValid(handleObjects[i]))
+                        Networking.SetOwner(localPlayer, handleObjects[i]);
+                    MoveHandle(i, framePosition, frameRotation);
+                    if (stateIndex >= 0)
+                        BroadcastState(objectId, StateHeld,
+                            Utilities.IsValid(localPlayer) ? localPlayer.playerId : 0, -1,
+                            framePosition, frameRotation);
                     Log(GrabQvStrings.HeldLog + objectId);
                 }
                 if (!handleDropPending[i])
@@ -1003,12 +1085,47 @@ namespace Maaaaa.EXQv
                     continue;
                 Vector3 droppedPosition;
                 Quaternion droppedRotation;
-                if (!TryGetObjectFrame(objectId, out droppedPosition, out droppedRotation))
+                if (!Utilities.IsValid(handleObjects[i]))
                     continue;
-                DetermineAndBroadcastState(objectId, null, droppedPosition, droppedRotation,
-                    handleHeldHandMasks[i], false);
+                droppedPosition = handleObjects[i].transform.position;
+                droppedRotation = handleObjects[i].transform.rotation;
+                if (FindState(objectId) >= 0)
+                    DetermineAndBroadcastState(objectId, null, droppedPosition, droppedRotation,
+                        handleHeldHandMasks[i], false);
                 Log(GrabQvStrings.DroppedLog + objectId);
             }
+        }
+
+        private void UpdateLocallyHeldHandles()
+        {
+            for (int i = 0; i < handleObjectIds.Length; i++)
+            {
+                if (handleObjectIds[i] == 0 || !IsHandleHeldLocally(i) ||
+                    !Utilities.IsValid(handleObjects[i]) || !Utilities.IsValid(handleTargets[i]) ||
+                    !Networking.IsOwner(handleObjects[i]))
+                    continue;
+                handleObjects[i].transform.SetPositionAndRotation(handleTargets[i].position,
+                    handleTargets[i].rotation);
+            }
+        }
+
+        private bool IsHandleHeldLocally(int index)
+        {
+            if (index < 0 || index >= handlePickups.Length || !Utilities.IsValid(handlePickups[index]))
+                return false;
+            VRCPlayerApi player = handlePickups[index].currentPlayer;
+            return handlePickups[index].IsHeld && Utilities.IsValid(player) && player.isLocal;
+        }
+
+        private void StopLocalGrabIfHeldByAnother(int handleIndex, int playerId)
+        {
+            VRCPlayerApi localPlayer = Networking.LocalPlayer;
+            if (handleIndex < 0 || handleIndex >= handlePickups.Length ||
+                !Utilities.IsValid(localPlayer) || playerId == localPlayer.playerId ||
+                !Utilities.IsValid(handlePickups[handleIndex]) || !IsHandleHeldLocally(handleIndex))
+                return;
+            handlePickups[handleIndex].Drop();
+            ResetHandleState(handleIndex);
         }
 
         private bool IsCombinedPen(int penIndex)
@@ -1062,21 +1179,30 @@ namespace Maaaaa.EXQv
         private void UpdateHandleBounds(int objectId)
         {
             int handleIndex = FindHandleForObject(objectId);
-            if (handleIndex < 0 || !Utilities.IsValid(handleColliders[handleIndex]))
+            if (handleIndex < 0 || !Utilities.IsValid(handleTargets[handleIndex]) ||
+                !Utilities.IsValid(handleColliders[handleIndex]))
                 return;
             int stateIndex = FindState(objectId);
+            Vector3 framePosition;
+            Quaternion frameRotation;
             if (stateIndex >= 0)
             {
-                Vector3 framePosition;
-                Quaternion frameRotation;
                 if (!TryGetObjectFrame(objectId, out framePosition, out frameRotation))
                     return;
-                handleColliders[handleIndex].transform.SetPositionAndRotation(framePosition, frameRotation);
-                handleLastFramePositions[handleIndex] = framePosition;
-                handleLastFrameRotations[handleIndex] = frameRotation;
-                handleHasLastFrame[handleIndex] = true;
             }
-            Transform handle = handleColliders[handleIndex].transform;
+            else
+            {
+                if (!Utilities.IsValid(handleObjects[handleIndex]))
+                    return;
+                framePosition = handleObjects[handleIndex].transform.position;
+                frameRotation = handleObjects[handleIndex].transform.rotation;
+            }
+            if (!IsHandleHeldLocally(handleIndex))
+                handleTargets[handleIndex].SetPositionAndRotation(framePosition, frameRotation);
+            handleLastFramePositions[handleIndex] = framePosition;
+            handleLastFrameRotations[handleIndex] = frameRotation;
+            handleHasLastFrame[handleIndex] = true;
+            Transform handle = handleTargets[handleIndex];
             Vector3 minimum = Vector3.zero;
             Vector3 maximum = Vector3.zero;
             bool found = false;
@@ -1208,6 +1334,7 @@ namespace Maaaaa.EXQv
             if (Utilities.IsValid(localPlayer) && Utilities.IsValid(handleObjects[index]))
                 Networking.SetOwner(localPlayer, handleObjects[index]);
             MoveHandle(index, handleHomePositions[index], handleHomeRotations[index]);
+            MoveHandleTargetHome(index);
             if (FindState(objectId) >= 0)
                 BroadcastState(objectId, StateNone, 0, -1, Vector3.zero, Quaternion.identity);
             Log(GrabQvStrings.ReleasedLog + objectId);
@@ -1243,18 +1370,20 @@ namespace Maaaaa.EXQv
             handleHasLastFrame = new bool[length];
             handleHomePositions = new Vector3[length];
             handleHomeRotations = new Quaternion[length];
+            handleTargetHomePositions = new Vector3[length];
+            handleTargetHomeRotations = new Quaternion[length];
             for (int i = 0; i < length; i++)
             {
                 if (!Utilities.IsValid(handleObjects[i]))
                     continue;
                 handleHomePositions[i] = handleObjects[i].transform.position;
                 handleHomeRotations[i] = handleObjects[i].transform.rotation;
-                handleEmptySince[i] = -1f;
-                if (Utilities.IsValid(handleColliders[i]))
+                if (Utilities.IsValid(handleTargets[i]))
                 {
-                    handleColliders[i].transform.localPosition = Vector3.zero;
-                    handleColliders[i].transform.localRotation = Quaternion.identity;
+                    handleTargetHomePositions[i] = handleTargets[i].position;
+                    handleTargetHomeRotations[i] = handleTargets[i].rotation;
                 }
+                handleEmptySince[i] = -1f;
                 SetHandleAvailable(i, false);
             }
         }
@@ -1270,11 +1399,6 @@ namespace Maaaaa.EXQv
             handleHasLastFrame[index] = false;
             handleLastFramePositions[index] = Vector3.zero;
             handleLastFrameRotations[index] = Quaternion.identity;
-            if (Utilities.IsValid(handleColliders[index]))
-            {
-                handleColliders[index].transform.localPosition = Vector3.zero;
-                handleColliders[index].transform.localRotation = Quaternion.identity;
-            }
         }
 
         private void SetHandleAvailable(int index, bool assigned)
@@ -1298,6 +1422,14 @@ namespace Maaaaa.EXQv
             handleObjects[index].transform.SetPositionAndRotation(position, rotation);
             if (Utilities.IsValid(handleSyncs[index]))
                 handleSyncs[index].FlagDiscontinuity();
+        }
+
+        private void MoveHandleTargetHome(int index)
+        {
+            if (index < 0 || index >= handleTargets.Length || !Utilities.IsValid(handleTargets[index]))
+                return;
+            handleTargets[index].SetPositionAndRotation(handleTargetHomePositions[index],
+                handleTargetHomeRotations[index]);
         }
 
         private bool HasAssignedHandle()
@@ -1600,6 +1732,7 @@ namespace Maaaaa.EXQv
                 {
                     ClearCurrentObject(previousObjectId);
                     SetHandleAvailable(i, false);
+                    MoveHandleTargetHome(i);
                     handleAssignedTimes[i] = 0f;
                     handleEmptySince[i] = -1f;
                     handleSawInk[i] = false;
@@ -1610,6 +1743,9 @@ namespace Maaaaa.EXQv
                     handleEmptySince[i] = -1f;
                     handleSawInk[i] = HasLiveInk(objectId);
                     SetHandleAvailable(i, true);
+                    if (Utilities.IsValid(handleObjects[i]) && Utilities.IsValid(handleTargets[i]))
+                        handleTargets[i].SetPositionAndRotation(handleObjects[i].transform.position,
+                            handleObjects[i].transform.rotation);
                     RemovePendingRequest(objectId);
                     TryApplyBindingsForObject(objectId);
                 }
