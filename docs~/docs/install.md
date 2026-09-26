@@ -31,6 +31,7 @@ Unity の Project ウィンドウで、`Packages` の下に **EXQv** が増え�
 | `BodyQvManager` | 同上 | 管理だけ。[手持ちの QvPen](existing-pens.md) を対象にするとき |
 | `GrabQv` | `Packages/EXQv/Prefabs/GrabQv/` | 描いたものを持てる QvPen 一式（ペン・消しゴム・区切りボタン・持ち手・管理） |
 | `GrabQvManager` | 同上 | 管理と持ち手だけ |
+| `BodyGrabQv` | `Packages/EXQv/Prefabs/BodyGrabQv/` | 体に付いて、持って直せる QvPen 一式（上の 2 つの管理を組み合わせたもの） |
 
 ## アンインストール
 

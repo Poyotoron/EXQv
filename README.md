@@ -1,6 +1,6 @@
 # EXQv
 
-VRChat のワールドに置く [QvPen](https://github.com/ureishi/QvPen) を拡張するパッケージです。QvPen で描いた線を**アバターの体に追従させたり**（BodyQv）、**手で持って動かせるようにしたり**（GrabQv）できます。
+VRChat のワールドに置く [QvPen](https://github.com/ureishi/QvPen) を拡張するパッケージです。QvPen で描いた線を**アバターの体に追従させたり**（BodyQv）、**手で持って動かせるようにしたり**（GrabQv）できます。2 つを組み合わせて、**体に付けたものを持って付け直す**こともできます。
 
 📖 **[使い方ドキュメント](https://ghp.maaaaa.net/EXQv/)** — 設置の手順・線の付き方・できないこと・困ったときの対処
 
@@ -10,10 +10,11 @@ VRChat のワールドに置く [QvPen](https://github.com/ureishi/QvPen) を拡
 
 | 機能 | 概要 |
 |---|---|
-| **BodyQv** | 体の上に描いた線が、その人が動いても体に付いたまま追従します。顔・腕・胴のほか、頭の上に浮かせて描いた猫耳やヘイローも頭と一緒に動きます。体の表面をなぞって描くこともできます |
+| **BodyQv** | 体の上に描いた線が、その人が動いても体に付いたまま追従します。顔・腕・胴のほか、頭の上に浮かせて描いた猫耳やヘイロー、背中から描き出した翼も体と一緒に動きます。体の表面をなぞって描くこともできます |
 | **GrabQv** | 描いた線を、まとまりごとに誰でも手で持って動かせます。まとまりはペンの Split ボタンで区切ります |
+| **BodyQv + GrabQv** | 描いたものが体に付いて追従し、持って位置を直せます。離した場所で付け先を決め直します（空中なら浮いたまま、体の近くならその部位に付きます） |
 
-どちらも専用の Prefab をワールドに置くだけで動きます。描かれる人・持つ人の側には何も要りません。後から入った人にも同期されます。
+どれも専用の Prefab をワールドに置くだけで動きます。描かれる人・持つ人の側には何も要りません。後から入った人にも同期されます。
 
 同じワールドに置いたふつうの QvPen は、何も変わらずに動きます。QvPen 本体のファイルは書き換えません。
 
@@ -34,7 +35,7 @@ VRChat のワールドに置く [QvPen](https://github.com/ureishi/QvPen) を拡
 1. VCC / ALCOM にリポジトリを追加します。
 2. ワールドのプロジェクトの Manage Packages から「EXQv」を追加します。
 
-`Packages/EXQv/Prefabs/` の `BodyQv` / `GrabQv` をシーンに置けば使えます。BodyQv は、Inspector に出る案内に従って衝突の設定を直してください。詳しくは[クイックスタート](https://ghp.maaaaa.net/EXQv/quickstart/)を参照してください。
+`Packages/EXQv/Prefabs/` の `BodyQv` / `GrabQv` / `BodyGrabQv` をシーンに置けば使えます。BodyQv と BodyGrabQv は、Inspector に出る案内に従って衝突の設定を直してください。詳しくは[クイックスタート](https://ghp.maaaaa.net/EXQv/quickstart/)を参照してください。
 
 VCC を使っていない場合は、[リリースページ](https://github.com/Poyotoron/EXQv/releases)の `.unitypackage` からも導入できます。
 
